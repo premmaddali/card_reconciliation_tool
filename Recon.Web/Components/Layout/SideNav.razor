@@ -1,0 +1,91 @@
+@inject IPermissionService Permissions
+@inject AuthenticationStateProvider AuthState
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Recon.Web.Services
+@using Microsoft.EntityFrameworkCore
+
+<aside class="flex shrink-0 flex-col border-r border-gray-200 bg-white transition-all duration-200 dark:border-gray-800 dark:bg-gray-900 @(Collapsed ? "w-20" : "w-64")">
+    <div class="flex h-16 items-center gap-3 border-b border-gray-200 px-5 dark:border-gray-800">
+        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-700 text-sm font-bold text-white shadow-sm">
+            RT
+        </div>
+        <div class="leading-tight @(Collapsed ? "hidden" : "")">
+            <p class="text-sm font-semibold text-gray-900 dark:text-white">Recon Tool</p>
+            <p class="text-[11px] text-gray-500 dark:text-gray-400">MasterCard · BankOne</p>
+        </div>
+    </div>
+
+    <nav class="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+        @foreach (var group in _menu.GroupBy(m => new { m.GroupName, m.GroupSequence }).OrderBy(g => g.Key.GroupSequence))
+        {
+            <div @key="@(group.Key.GroupName ?? "_")">
+                @if (group.Key.GroupName is not null)
+                {
+                    <p class="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 @(Collapsed ? "hidden" : "")">@group.Key.GroupName</p>
+                }
+                <div class="space-y-0.5">
+                    @foreach (var item in group)
+                    {
+                        <NavLink @key="item.Route" href="@item.Route" Match="@(item.Route == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)"
+                                 title="@(Collapsed ? item.PageName : null)"
+                                 class="@NavLinkClass()"
+                                 ActiveClass="!bg-primary-50 !text-primary-700 dark:!bg-primary-900/40 dark:!text-primary-200">
+                            @NavIcon(item.Icon)
+                            <span class="@(Collapsed ? "hidden" : "")">@item.PageName</span>
+                        </NavLink>
+                    }
+                </div>
+            </div>
+        }
+    </nav>
+
+    <div class="border-t border-gray-200 p-3 dark:border-gray-800">
+        <div class="flex items-center gap-3 rounded-lg px-2 py-1.5 @(Collapsed ? "justify-center" : "")">
+            <AvatarInitials Name="@_fullName" Size="sm" />
+            <div class="min-w-0 flex-1 leading-tight @(Collapsed ? "hidden" : "")">
+                <p class="truncate text-sm font-medium text-gray-900 dark:text-white">@_fullName</p>
+                <p class="truncate text-[11px] text-gray-400">@_roleLabel</p>
+            </div>
+        </div>
+    </div>
+</aside>
+
+@code {
+    [Parameter] public bool Collapsed { get; set; }
+    private IReadOnlyList<MenuItem> _menu = [];
+    private string _fullName = "";
+    private string _roleLabel = "";
+
+    private string NavLinkClass() => "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white" + (Collapsed ? " justify-center" : "");
+
+    private RenderFragment NavIcon(string? icon) => icon switch
+    {
+        "dashboard" => @<GridIcon Class="h-5 w-5 shrink-0" />,
+        "atm" => @<RocketIcon Class="h-5 w-5 shrink-0" />,
+        "pos" => @<TableRowIcon Class="h-5 w-5 shrink-0" />,
+        "bulk" => @<ChartIcon Class="h-5 w-5 shrink-0" />,
+        "alert" => @<ExclamationTriangleIcon Class="h-5 w-5 shrink-0" />,
+        "import" => @<FileImportIcon Class="h-5 w-5 shrink-0" />,
+        "list" => @<ListIcon Class="h-5 w-5 shrink-0" />,
+        "users" => @<UsersIcon Class="h-5 w-5 shrink-0" />,
+        "roles" => @<LockIcon Class="h-5 w-5 shrink-0" />,
+        _ => @<FolderIcon Class="h-5 w-5 shrink-0" />
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var idClaim = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(idClaim, out var userId)) return;
+
+        _menu = await Permissions.GetMenuAsync(userId);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var info = await db.Users
+            .Where(u => u.Id == userId)
+            .Select(u => new { u.FullName, Roles = u.UserAppAccesses.Where(a => a.IsActive).Select(a => a.AppAccess.AccessName).ToList() })
+            .FirstOrDefaultAsync();
+        _fullName = info?.FullName ?? state.User.Identity?.Name ?? "";
+        _roleLabel = info?.Roles.Count > 0 ? string.Join(", ", info.Roles) : "No role";
+    }
+}

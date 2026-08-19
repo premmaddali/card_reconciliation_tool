@@ -1,0 +1,91 @@
+@page "/import"
+@inject Recon.Web.Services.Import.IImportService ImportService
+@using Recon.Web.Services.Import
+
+<PageTitle>Import files · Recon Tool</PageTitle>
+
+<PageHeader Title="Import files" Subtitle="Upload a BankOne export — the source type is detected automatically"
+            Breadcrumbs="@(new[] { "Reconciliation", "Import" })" />
+
+<div class="max-w-2xl">
+    <div class="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">Period (YYYY-MM)</label>
+        <input @bind="_periodKey" placeholder="2026-03"
+               class="mb-4 w-40 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+
+        <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">Excel file (.xlsx)</label>
+        <InputFile OnChange="OnFilesSelected" multiple accept=".xlsx" disabled="@_busy"
+                   class="block w-full text-sm text-gray-500 file:mr-4 file:rounded-lg file:border-0 file:bg-primary-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-primary-700 dark:text-gray-400" />
+
+        @if (_busy)
+        {
+            <p class="mt-4 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                <RefreshIcon Class="h-4 w-4 animate-spin" /> Parsing @_currentFile …
+            </p>
+        }
+    </div>
+
+    @if (_results.Count > 0)
+    {
+        <div class="mt-6 space-y-2">
+            @foreach (var r in _results)
+            {
+                <div @key="r" class="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm dark:border-gray-700 dark:bg-gray-800">
+                    <div>
+                        <span class="font-medium text-gray-900 dark:text-white">@r.FileName</span>
+                        @if (r.Outcome.DetectedType is not null)
+                        {
+                            <span class="ml-2 text-gray-400">→ @r.Outcome.DetectedType</span>
+                        }
+                    </div>
+                    @if (r.Outcome.Success)
+                    {
+                        <StatusBadge Text="@($"{r.Outcome.RowCount:N0} rows")" Color="green" />
+                    }
+                    else if (r.Outcome.Duplicate)
+                    {
+                        <StatusBadge Text="Already imported" Color="amber" />
+                    }
+                    else
+                    {
+                        <StatusBadge Text="@(r.Outcome.Error ?? "Failed")" Color="red" />
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private record UploadResult(string FileName, ImportOutcome Outcome);
+
+    private string _periodKey = "2026-03";
+    private bool _busy;
+    private string? _currentFile;
+    private readonly List<UploadResult> _results = new();
+
+    // 200 MB cap — the largest sample (Interchange) is ~23 MB.
+    private const long MaxBytes = 200L * 1024 * 1024;
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _busy = true;
+        _results.Clear();
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(maximumFileCount: 10))
+            {
+                _currentFile = file.Name;
+                StateHasChanged();
+                await using var stream = file.OpenReadStream(MaxBytes);
+                var outcome = await ImportService.ImportAsync(stream, file.Name, _periodKey);
+                _results.Add(new UploadResult(file.Name, outcome));
+            }
+        }
+        finally
+        {
+            _busy = false;
+            _currentFile = null;
+        }
+    }
+}

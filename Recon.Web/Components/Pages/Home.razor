@@ -1,0 +1,96 @@
+@page "/"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+
+<PageTitle>Dashboard · Recon Tool</PageTitle>
+
+<PageHeader Title="Dashboard" Subtitle="MasterCard reconciliation — BankOne" />
+
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <StatCard Label="Files imported" Value="@_batchCount.ToString()" Hint="staging batches" Accent="blue">
+        <Icon><FileImportIcon Class="h-5 w-5" /></Icon>
+    </StatCard>
+    <StatCard Label="Rows staged" Value="@_rowCount.ToString("N0")" Hint="across all sources" Accent="violet">
+        <Icon><ListIcon Class="h-5 w-5" /></Icon>
+    </StatCard>
+    <StatCard Label="Sources loaded" Value="@($"{_sourcesLoaded}/5")" Hint="required file types" Accent="green">
+        <Icon><CheckIcon Class="h-5 w-5" /></Icon>
+    </StatCard>
+    <StatCard Label="Recon runs" Value="@_runCount.ToString()" Hint="reconciliations" Accent="amber">
+        <Icon><RefreshIcon Class="h-5 w-5" /></Icon>
+    </StatCard>
+</div>
+
+<div class="mt-6 grid gap-6 lg:grid-cols-3">
+    <div class="lg:col-span-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Recent reconciliation runs</h2>
+        </div>
+        <table class="w-full text-left text-sm">
+            <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                <tr class="border-b border-gray-100 dark:border-gray-700">
+                    <th class="px-5 py-2.5 font-semibold">Run</th>
+                    <th class="px-5 py-2.5 font-semibold">Function</th>
+                    <th class="px-5 py-2.5 text-right font-semibold">Matched</th>
+                    <th class="px-5 py-2.5 text-right font-semibold">Exceptions</th>
+                    <th class="px-5 py-2.5 text-right font-semibold">Confidence</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                @if (_runs.Count == 0)
+                {
+                    <tr><td colspan="5" class="px-5 py-8 text-center text-gray-500 dark:text-gray-400">No runs yet — start with <a href="/recon/pos" class="text-primary-600 hover:underline">POS recon</a>.</td></tr>
+                }
+                @foreach (var r in _runs)
+                {
+                    <tr @key="r.ReconRunId" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40" @onclick="() => Open(r.ReconRunId)">
+                        <td class="px-5 py-2.5 font-semibold text-primary-700 dark:text-primary-300">#@r.ReconRunId</td>
+                        <td class="px-5 py-2.5 text-gray-700 dark:text-gray-200">@FunctionName(r.Function)</td>
+                        <td class="px-5 py-2.5 text-right tabular-nums text-emerald-700 dark:text-emerald-300">@r.MatchedCount.ToString("N0")</td>
+                        <td class="px-5 py-2.5 text-right tabular-nums text-red-700 dark:text-red-300">@r.ExceptionCount.ToString("N0")</td>
+                        <td class="px-5 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-200">@r.AverageConfidence.ToString("0.0")%</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Run a reconciliation</h2>
+        <div class="mt-3 space-y-2">
+            <a href="/recon/atm" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><RocketIcon Class="h-5 w-5 text-primary-600" /> ATM recon</a>
+            <a href="/recon/pos" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><TableRowIcon Class="h-5 w-5 text-primary-600" /> POS recon</a>
+            <a href="/recon/bulk" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><ChartIcon Class="h-5 w-5 text-primary-600" /> Bulk recon</a>
+        </div>
+        <p class="mt-4 text-xs text-gray-500 dark:text-gray-400">Import the GL dump and a processor file first on the <a href="/import" class="text-primary-600 hover:underline">Import</a> page.</p>
+    </div>
+</div>
+
+@code {
+    private int _batchCount, _runCount, _sourcesLoaded;
+    private long _rowCount;
+    private List<ReconRun> _runs = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var parsed = db.ImportBatches.Where(b => b.Status == ImportStatus.Parsed);
+        _batchCount = await db.ImportBatches.CountAsync();
+        _rowCount = await parsed.SumAsync(b => (long)b.RowCount);
+        _sourcesLoaded = await parsed.Select(b => b.SourceType).Distinct().CountAsync();
+        _runCount = await db.ReconRuns.CountAsync();
+        _runs = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed)
+            .OrderByDescending(r => r.CreatedDate).Take(8).ToListAsync();
+    }
+
+    private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}");
+
+    private static string FunctionName(ReconFunction f) => f switch
+    {
+        ReconFunction.AtmToGl => "ATM recon",
+        ReconFunction.PosToGl => "POS recon",
+        _ => "Bulk recon"
+    };
+}

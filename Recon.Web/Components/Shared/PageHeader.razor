@@ -1,0 +1,30 @@
+<div class="mb-6">
+    <nav class="mb-1 flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
+        <a href="/" class="hover:text-primary-600">Home</a>
+        @foreach (var crumb in Breadcrumbs)
+        {
+            <ChevronRightIcon @key="crumb" Class="h-3 w-3" />
+            <span class="last:text-gray-500 dark:last:text-gray-400">@crumb</span>
+        }
+    </nav>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+            <h1 class="text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">@Title</h1>
+            @if (!string.IsNullOrEmpty(Subtitle))
+            {
+                <p class="mt-0.5 text-sm text-gray-500 dark:text-gray-400">@Subtitle</p>
+            }
+        </div>
+        @if (Actions is not null)
+        {
+            <div class="flex items-center gap-2">@Actions</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string[] Breadcrumbs { get; set; } = [];
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

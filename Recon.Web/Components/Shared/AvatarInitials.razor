@@ -1,0 +1,37 @@
+<span class="inline-flex @SizeClasses items-center justify-center rounded-full font-semibold text-white @ColorClass">
+    @Initials
+</span>
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+    [Parameter] public string Size { get; set; } = "md"; // sm | md | lg
+
+    private static readonly string[] Palette =
+    [
+        "bg-primary-600", "bg-emerald-600", "bg-violet-600",
+        "bg-amber-600", "bg-rose-600", "bg-cyan-600", "bg-indigo-600"
+    ];
+
+    private string Initials
+    {
+        get
+        {
+            var parts = Name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length switch
+            {
+                0 => "?",
+                1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(),
+                _ => $"{char.ToUpperInvariant(parts[0][0])}{char.ToUpperInvariant(parts[^1][0])}"
+            };
+        }
+    }
+
+    private string ColorClass => Palette[Math.Abs(Name.GetHashCode(StringComparison.OrdinalIgnoreCase)) % Palette.Length];
+
+    private string SizeClasses => Size switch
+    {
+        "sm" => "h-7 w-7 text-[10px]",
+        "lg" => "h-11 w-11 text-sm",
+        _ => "h-9 w-9 text-xs"
+    };
+}

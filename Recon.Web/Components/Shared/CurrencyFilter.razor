@@ -1,0 +1,19 @@
+@using Microsoft.AspNetCore.Components
+@using Recon.Web.Domain.Reference
+
+<select value="@Value" @onchange="OnChanged" class="w-20 rounded border border-gray-300 bg-white px-1 py-1 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
+    <option value="">All</option>
+    @foreach (var ccy in Currencies)
+    {
+        <option value="@ccy">@Name(ccy)</option>
+    }
+</select>
+
+@code {
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public IEnumerable<int> Currencies { get; set; } = [];
+
+    private Task OnChanged(ChangeEventArgs e) => ValueChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    private static string Name(int ccy) => IsoCurrencyCatalog.Display(ccy);
+}

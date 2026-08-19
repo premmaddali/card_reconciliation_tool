@@ -1,0 +1,11 @@
+@page "/recon/atm"
+@using Recon.Web.Domain.Import
+
+<PageTitle>ATM recon · Recon Tool</PageTitle>
+
+<ReconRunner Function="ReconFunction.AtmToGl"
+             Title="ATM reconciliation"
+             Subtitle="Match ATM settlement transactions to the GL cardholder-settlement (CASH) entries"
+             ShortName="ATM"
+             ProcessorLabel="ATM settlement"
+             ProcessorSource="SourceType.AtmSettlement" />

@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+@plugin "flowbite/plugin";
+
+/* Scan the app's markup + the Flowbite Blazor component library's classes */
+@source "../Components/**/*.{razor,html,cshtml,cs}";
+@source "../obj/**/Flowbite/**/*.cs";
+
+@theme {
+    /* Indigo-leaning primary for stronger contrast against the neutral greys. */
+    --color-primary-50: #eef2ff;
+    --color-primary-100: #e0e7ff;
+    --color-primary-200: #c7d2fe;
+    --color-primary-300: #a5b4fc;
+    --color-primary-400: #818cf8;
+    --color-primary-500: #6366f1;
+    --color-primary-600: #4f46e5;
+    --color-primary-700: #4338ca;
+    --color-primary-800: #3730a3;
+    --color-primary-900: #312e81;
+}
+
+/* Tabular figures for all amount/confidence columns. */
+.tabular-nums { font-variant-numeric: tabular-nums; }

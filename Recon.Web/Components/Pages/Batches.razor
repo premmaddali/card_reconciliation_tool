@@ -1,0 +1,60 @@
+@page "/batches"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+
+<PageTitle>Import batches · Recon Tool</PageTitle>
+
+<PageHeader Title="Import batches" Subtitle="Every staged source file"
+            Breadcrumbs="@(new[] { "Reconciliation", "Batches" })" />
+
+<div class="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+    <table class="w-full text-left text-sm">
+        <thead class="border-b border-gray-200 text-xs uppercase tracking-wider text-gray-400 dark:border-gray-700">
+            <tr>
+                <th class="px-5 py-3 font-medium">Source</th>
+                <th class="px-5 py-3 font-medium">File</th>
+                <th class="px-5 py-3 font-medium">Period</th>
+                <th class="px-5 py-3 text-right font-medium">Rows</th>
+                <th class="px-5 py-3 font-medium">Status</th>
+                <th class="px-5 py-3 font-medium">Imported</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            @if (_batches.Count == 0)
+            {
+                <tr><td colspan="6" class="px-5 py-10 text-center text-gray-400">No files imported yet — start on the <a href="/import" class="text-primary-600 hover:underline">Import</a> page.</td></tr>
+            }
+            @foreach (var b in _batches)
+            {
+                <tr @key="b.ImportBatchId" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td class="px-5 py-3 font-medium text-gray-900 dark:text-white">@b.SourceType</td>
+                    <td class="px-5 py-3 text-gray-600 dark:text-gray-300">@b.FileName</td>
+                    <td class="px-5 py-3 text-gray-600 dark:text-gray-300">@b.PeriodKey</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-gray-600 dark:text-gray-300">@b.RowCount.ToString("N0")</td>
+                    <td class="px-5 py-3">
+                        <StatusBadge Text="@b.Status.ToString()" Color="@StatusColor(b.Status)" />
+                    </td>
+                    <td class="px-5 py-3 text-gray-500 dark:text-gray-400">@b.CreatedDate.ToLocalTime().ToString("dd MMM HH:mm")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<ImportBatch> _batches = new();
+
+    private static string StatusColor(ImportStatus s) => s switch
+    {
+        ImportStatus.Parsed => "green",
+        ImportStatus.Failed => "red",
+        _ => "amber"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _batches = await db.ImportBatches.OrderByDescending(b => b.CreatedDate).ToListAsync();
+    }
+}

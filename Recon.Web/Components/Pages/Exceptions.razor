@@ -1,0 +1,77 @@
+@page "/exceptions"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+
+<PageTitle>Exceptions · Recon Tool</PageTitle>
+
+<PageHeader Title="Exceptions" Subtitle="Open items across all reconciliation runs"
+            Breadcrumbs="@(new[] { "Reconciliation", "Exceptions" })" />
+
+<div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <table class="w-full text-left text-sm">
+        <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            <tr class="border-b border-gray-100 dark:border-gray-700">
+                <th class="px-5 py-2.5 font-semibold">Run</th>
+                <th class="px-5 py-2.5 font-semibold">Function</th>
+                <th class="px-5 py-2.5 font-semibold">Period</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Open</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Investigating</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Resolved</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Total</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            @if (_rows.Count == 0)
+            {
+                <tr><td colspan="7" class="px-5 py-10 text-center text-gray-500 dark:text-gray-400">No runs with exceptions yet.</td></tr>
+            }
+            @foreach (var r in _rows)
+            {
+                <tr @key="r.RunId" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40" @onclick="() => Open(r.RunId)">
+                    <td class="px-5 py-3 font-semibold text-primary-700 dark:text-primary-300">#@r.RunId</td>
+                    <td class="px-5 py-3 text-gray-700 dark:text-gray-200">@r.Function</td>
+                    <td class="px-5 py-3 text-gray-600 dark:text-gray-300">@r.Period</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-red-700 dark:text-red-300">@r.Open.ToString("N0")</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-amber-700 dark:text-amber-300">@r.Investigating.ToString("N0")</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-emerald-700 dark:text-emerald-300">@r.Resolved.ToString("N0")</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-gray-700 dark:text-gray-200">@r.Total.ToString("N0")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private record Row(int RunId, string Function, string Period, int Open, int Investigating, int Resolved, int Total);
+    private List<Row> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var runs = await db.ReconRuns.OrderByDescending(r => r.CreatedDate).Take(50).ToListAsync();
+        var agg = await db.ReconExceptions
+            .GroupBy(e => new { e.ReconRunId, e.Status })
+            .Select(g => new { g.Key.ReconRunId, g.Key.Status, Count = g.Count() })
+            .ToListAsync();
+
+        _rows = runs.Select(r =>
+        {
+            int C(ExceptionStatus s) => agg.Where(a => a.ReconRunId == r.ReconRunId && a.Status == s).Sum(a => a.Count);
+            var total = agg.Where(a => a.ReconRunId == r.ReconRunId).Sum(a => a.Count);
+            return new Row(r.ReconRunId, FunctionName(r.Function), r.PeriodKey,
+                C(ExceptionStatus.Open), C(ExceptionStatus.Investigating), C(ExceptionStatus.Resolved), total);
+        }).Where(r => r.Total > 0).ToList();
+    }
+
+    private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}");
+
+    private static string FunctionName(ReconFunction f) => f switch
+    {
+        ReconFunction.AtmToGl => "ATM recon",
+        ReconFunction.PosToGl => "POS recon",
+        _ => "Bulk recon"
+    };
+}

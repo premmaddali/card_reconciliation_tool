@@ -1,0 +1,11 @@
+@page "/recon/pos"
+@using Recon.Web.Domain.Import
+
+<PageTitle>POS recon · Recon Tool</PageTitle>
+
+<ReconRunner Function="ReconFunction.PosToGl"
+             Title="POS reconciliation"
+             Subtitle="Match POS settlement transactions to the GL cardholder-settlement (POS) entries"
+             ShortName="POS"
+             ProcessorLabel="POS settlement"
+             ProcessorSource="SourceType.PosSettlement" />

@@ -1,0 +1,265 @@
+@page "/admin/users"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject UserManager<Recon.Web.Domain.Identity.AppUser> UserManager
+@inject Recon.Web.Services.ICurrentUserService CurrentUser
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Identity
+
+<PageTitle>Users · Recon Tool</PageTitle>
+
+<PageHeader Title="Users" Subtitle="Provision accounts and assign reconciliation roles"
+            Breadcrumbs="@(new[] { "Administration", "Users" })">
+    <Actions>
+        <button type="button" @onclick="OpenNew"
+                class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+            <PlusIcon Class="h-4 w-4" /> New user
+        </button>
+    </Actions>
+</PageHeader>
+
+<div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <table class="w-full text-left text-sm">
+        <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            <tr class="border-b border-gray-100 dark:border-gray-700">
+                <th class="px-5 py-2.5 font-semibold">User</th>
+                <th class="px-5 py-2.5 font-semibold">Username</th>
+                <th class="px-5 py-2.5 font-semibold">Provider</th>
+                <th class="px-5 py-2.5 font-semibold">Roles</th>
+                <th class="px-5 py-2.5 font-semibold">Status</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            @foreach (var u in _users)
+            {
+                <tr @key="u.Id" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td class="px-5 py-3">
+                        <div class="flex items-center gap-2.5">
+                            <AvatarInitials Name="@u.FullName" Size="sm" />
+                            <div class="leading-tight">
+                                <p class="font-medium text-gray-900 dark:text-white">@u.FullName</p>
+                                @if (!string.IsNullOrEmpty(u.Designation))
+                                {
+                                    <p class="text-[11px] text-gray-400">@u.Designation</p>
+                                }
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-5 py-3 text-gray-700 dark:text-gray-200">@u.UserName</td>
+                    <td class="px-5 py-3 text-gray-600 dark:text-gray-300">@u.AuthProvider</td>
+                    <td class="px-5 py-3">
+                        <div class="flex flex-wrap gap-1">
+                            @foreach (var r in u.Roles)
+                            {
+                                <StatusBadge Text="@r" Color="blue" />
+                            }
+                            @if (u.Roles.Count == 0)
+                            {
+                                <span class="text-xs text-gray-400">—</span>
+                            }
+                        </div>
+                    </td>
+                    <td class="px-5 py-3"><StatusBadge Text="@(u.IsActive ? "Active" : "Inactive")" Color="@(u.IsActive ? "green" : "gray")" /></td>
+                    <td class="px-5 py-3">
+                        <div class="flex items-center justify-end gap-1.5">
+                            <button type="button" @onclick="() => OpenRoles(u)" title="Manage roles"
+                                    class="rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">Roles</button>
+                            <button type="button" @onclick="() => ToggleActive(u)" title="Toggle active"
+                                    class="rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">@(u.IsActive ? "Disable" : "Enable")</button>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@if (_showNew)
+{
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @onclick="() => _showNew = false">
+        <div class="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800" @onclick:stopPropagation="true">
+            <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">New local user</h3>
+                <button type="button" class="rounded-lg p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" @onclick="() => _showNew = false"><CloseIcon Class="h-5 w-5" /></button>
+            </div>
+            <div class="space-y-3 px-5 py-4">
+                @foreach (var (label, getter, setter, type) in Fields)
+                {
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">@label</label>
+                        <input type="@type" value="@getter()" @oninput="e => setter(e.Value?.ToString() ?? string.Empty)"
+                               class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                    </div>
+                }
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Roles</label>
+                    <div class="space-y-1">
+                        @foreach (var role in _allRoles)
+                        {
+                            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                                <input type="checkbox" checked="@_newRoles.Contains(role.AppAccessId)"
+                                       @onchange="e => ToggleNewRole(role.AppAccessId, (bool)e.Value!)" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                                @role.AccessName
+                            </label>
+                        }
+                    </div>
+                </div>
+                @if (_newError is not null)
+                {
+                    <p class="text-xs text-red-600 dark:text-red-400">@_newError</p>
+                }
+            </div>
+            <div class="flex justify-end gap-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
+                <button type="button" @onclick="() => _showNew = false" class="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">Cancel</button>
+                <button type="button" @onclick="CreateUser" class="rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-700">Create</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_rolesUser is not null)
+{
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @onclick="() => _rolesUser = null">
+        <div class="w-full max-w-sm rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800" @onclick:stopPropagation="true">
+            <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Roles — @_rolesUser.FullName</h3>
+                <button type="button" class="rounded-lg p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" @onclick="() => _rolesUser = null"><CloseIcon Class="h-5 w-5" /></button>
+            </div>
+            <div class="space-y-1 px-5 py-4">
+                @foreach (var role in _allRoles)
+                {
+                    <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                        <input type="checkbox" checked="@_editRoles.Contains(role.AppAccessId)"
+                               @onchange="e => ToggleEditRole(role.AppAccessId, (bool)e.Value!)" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                        @role.AccessName
+                    </label>
+                }
+            </div>
+            <div class="flex justify-end gap-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
+                <button type="button" @onclick="() => _rolesUser = null" class="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">Cancel</button>
+                <button type="button" @onclick="SaveRoles" class="rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-700">Save</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private record UserRow(Guid Id, string FullName, string? UserName, string? Designation, AuthProvider AuthProvider, bool IsActive, List<string> Roles);
+
+    private List<UserRow> _users = new();
+    private List<AppAccess> _allRoles = new();
+
+    // New-user form
+    private bool _showNew;
+    private string _fullName = "", _userName = "", _password = "", _designation = "";
+    private readonly HashSet<int> _newRoles = new();
+    private string? _newError;
+
+    // Roles editor
+    private UserRow? _rolesUser;
+    private readonly HashSet<int> _editRoles = new();
+
+    private IEnumerable<(string, Func<string>, Action<string>, string)> Fields => new (string, Func<string>, Action<string>, string)[]
+    {
+        ("Full name", () => _fullName, v => _fullName = v, "text"),
+        ("Username", () => _userName, v => _userName = v, "text"),
+        ("Designation", () => _designation, v => _designation = v, "text"),
+        ("Password", () => _password, v => _password = v, "password"),
+    };
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _allRoles = await db.AppAccesses.Where(a => a.IsActive).OrderBy(a => a.AccessName).ToListAsync();
+        _users = await db.Users
+            .OrderBy(u => u.FullName)
+            .Select(u => new UserRow(u.Id, u.FullName, u.UserName, u.Designation, u.AuthProvider, u.IsActive,
+                u.UserAppAccesses.Where(a => a.IsActive).Select(a => a.AppAccess.AccessName).ToList()))
+            .ToListAsync();
+    }
+
+    private void OpenNew()
+    {
+        _fullName = _userName = _password = _designation = "";
+        _newRoles.Clear();
+        _newError = null;
+        _showNew = true;
+    }
+
+    private void ToggleNewRole(int id, bool on) { if (on) _newRoles.Add(id); else _newRoles.Remove(id); }
+    private void ToggleEditRole(int id, bool on) { if (on) _editRoles.Add(id); else _editRoles.Remove(id); }
+
+    private async Task CreateUser()
+    {
+        _newError = null;
+        if (string.IsNullOrWhiteSpace(_userName) || string.IsNullOrWhiteSpace(_fullName) || string.IsNullOrWhiteSpace(_password))
+        {
+            _newError = "Full name, username and password are required.";
+            return;
+        }
+        var user = new AppUser
+        {
+            UserName = _userName.Trim(),
+            Email = $"{_userName.Trim()}@local",
+            FullName = _fullName.Trim(),
+            Designation = string.IsNullOrWhiteSpace(_designation) ? null : _designation.Trim(),
+            AuthProvider = AuthProvider.Local,
+            IsActive = true,
+            EmailConfirmed = true
+        };
+        var result = await UserManager.CreateAsync(user, _password);
+        if (!result.Succeeded)
+        {
+            _newError = string.Join("; ", result.Errors.Select(e => e.Description));
+            return;
+        }
+        if (_newRoles.Count > 0)
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            foreach (var roleId in _newRoles)
+                db.UserAppAccesses.Add(new UserAppAccess { UserId = user.Id, AppAccessId = roleId });
+            await db.SaveChangesAsync();
+        }
+        _showNew = false;
+        await Load();
+    }
+
+    private async Task ToggleActive(UserRow u)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var user = await db.Users.FirstAsync(x => x.Id == u.Id);
+        user.IsActive = !user.IsActive;
+        await db.SaveChangesAsync();
+        await Load();
+    }
+
+    private async Task OpenRoles(UserRow u)
+    {
+        _rolesUser = u;
+        _editRoles.Clear();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var ids = await db.UserAppAccesses.Where(a => a.UserId == u.Id && a.IsActive).Select(a => a.AppAccessId).ToListAsync();
+        foreach (var id in ids) _editRoles.Add(id);
+    }
+
+    private async Task SaveRoles()
+    {
+        if (_rolesUser is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var current = await db.UserAppAccesses.Where(a => a.UserId == _rolesUser.Id).ToListAsync();
+        foreach (var link in current)
+        {
+            var shouldBeActive = _editRoles.Contains(link.AppAccessId);
+            link.IsActive = shouldBeActive;
+            link.IsDeleted = !shouldBeActive;
+        }
+        foreach (var roleId in _editRoles.Where(id => current.All(c => c.AppAccessId != id)))
+            db.UserAppAccesses.Add(new UserAppAccess { UserId = _rolesUser.Id, AppAccessId = roleId });
+        await db.SaveChangesAsync();
+        _rolesUser = null;
+        await Load();
+    }
+}

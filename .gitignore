@@ -1,0 +1,11 @@
+bin/
+obj/
+node_modules/
+wwwroot/css/app.min.css
+*.user
+.vs/
+SharedFiles/
+.recontool-runtime/
+.tmpbuild/
+.tmpobj/
+.claude/

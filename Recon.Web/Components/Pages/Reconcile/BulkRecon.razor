@@ -1,0 +1,11 @@
+@page "/recon/bulk"
+@using Recon.Web.Domain.Import
+
+<PageTitle>Bulk recon · Recon Tool</PageTitle>
+
+<ReconRunner Function="ReconFunction.InterchangeToGl"
+             Title="Bulk reconciliation"
+             Subtitle="Match all card transactions (Interchange report) to the GL cardholder-settlement entries"
+             ShortName="Bulk"
+             ProcessorLabel="Interchange report"
+             ProcessorSource="SourceType.InterchangeFee" />

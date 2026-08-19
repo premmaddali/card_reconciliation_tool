@@ -1,0 +1,148 @@
+@page "/admin/roles"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Identity
+
+<PageTitle>Roles &amp; access · Recon Tool</PageTitle>
+
+<PageHeader Title="Roles & access" Subtitle="Business roles and their page-level permissions"
+            Breadcrumbs="@(new[] { "Administration", "Roles" })" />
+
+<div class="grid gap-6 lg:grid-cols-3">
+    <div class="lg:col-span-1">
+        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Roles</h2>
+            </div>
+            <div class="divide-y divide-gray-100 dark:divide-gray-700">
+                @foreach (var r in _roles)
+                {
+                    <button type="button" @key="r.AppAccessId" @onclick="() => Select(r)"
+                            class="@RoleBtnClass(r)">
+                        <span class="font-medium">@r.AccessName</span>
+                        <span class="text-xs text-gray-400">@_userCounts.GetValueOrDefault(r.AppAccessId) users</span>
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="lg:col-span-2">
+        @if (_selected is null)
+        {
+            <div class="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                Select a role to edit its page permissions.
+            </div>
+        }
+        else
+        {
+            <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+                    <h2 class="text-sm font-semibold text-gray-900 dark:text-white">@_selected.AccessName — permissions</h2>
+                    <button type="button" @onclick="Save" disabled="@_saving"
+                            class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+                        <CheckIcon Class="h-4 w-4" /> Save
+                    </button>
+                </div>
+                <table class="w-full text-left text-sm">
+                    <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        <tr class="border-b border-gray-100 dark:border-gray-700">
+                            <th class="px-5 py-2.5 font-semibold">Page</th>
+                            <th class="px-3 py-2.5 text-center font-semibold">View</th>
+                            <th class="px-3 py-2.5 text-center font-semibold">Add</th>
+                            <th class="px-3 py-2.5 text-center font-semibold">Edit</th>
+                            <th class="px-3 py-2.5 text-center font-semibold">Delete</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                        @foreach (var p in _pages)
+                        {
+                            var g = _grants.GetValueOrDefault(p.AppPageId) ?? new Grant();
+                            _grants[p.AppPageId] = g;
+                            <tr @key="p.AppPageId" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                                <td class="px-5 py-2.5 text-gray-700 dark:text-gray-200">@p.PageName</td>
+                                <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.View" @onchange="e => g.View = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
+                                <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Add" @onchange="e => g.Add = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
+                                <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Edit" @onchange="e => g.Edit = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
+                                <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Delete" @onchange="e => g.Delete = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (_saved)
+                {
+                    <p class="border-t border-gray-200 px-5 py-2.5 text-xs text-emerald-600 dark:border-gray-700 dark:text-emerald-400">Permissions saved.</p>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private class Grant { public bool View, Add, Edit, Delete; }
+
+    private List<AppAccess> _roles = new();
+    private List<AppPage> _pages = new();
+    private Dictionary<int, int> _userCounts = new();
+
+    private AppAccess? _selected;
+    private Dictionary<int, Grant> _grants = new();
+    private bool _saving, _saved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _roles = await db.AppAccesses.Where(a => a.IsActive).OrderBy(a => a.AccessName).ToListAsync();
+        _pages = await db.AppPages.Where(p => p.IsActive && p.Route != null).OrderBy(p => p.Sequence).ToListAsync();
+        _userCounts = await db.UserAppAccesses.Where(a => a.IsActive)
+            .GroupBy(a => a.AppAccessId).Select(g => new { g.Key, C = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.C);
+    }
+
+    private async Task Select(AppAccess role)
+    {
+        _selected = role;
+        _saved = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var menus = await db.AppAccessMenus.Where(m => m.AppAccessId == role.AppAccessId && m.IsActive).ToListAsync();
+        _grants = _pages.ToDictionary(p => p.AppPageId, p =>
+        {
+            var m = menus.FirstOrDefault(x => x.PageId == p.AppPageId);
+            return new Grant { View = m?.CanView ?? false, Add = m?.CanAdd ?? false, Edit = m?.CanEdit ?? false, Delete = m?.CanDelete ?? false };
+        });
+    }
+
+    private async Task Save()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var existing = await db.AppAccessMenus.Where(m => m.AppAccessId == _selected.AppAccessId).ToListAsync();
+        foreach (var p in _pages)
+        {
+            var g = _grants[p.AppPageId];
+            var row = existing.FirstOrDefault(m => m.PageId == p.AppPageId);
+            if (row is null)
+            {
+                if (g.View || g.Add || g.Edit || g.Delete)
+                    db.AppAccessMenus.Add(new AppAccessMenu { AppAccessId = _selected.AppAccessId, PageId = p.AppPageId, CanView = g.View, CanAdd = g.Add, CanEdit = g.Edit, CanDelete = g.Delete });
+            }
+            else
+            {
+                row.CanView = g.View; row.CanAdd = g.Add; row.CanEdit = g.Edit; row.CanDelete = g.Delete;
+                row.IsActive = true; row.IsDeleted = false;
+            }
+        }
+        await db.SaveChangesAsync();
+        _saving = false;
+        _saved = true;
+    }
+
+    private string RoleBtnClass(AppAccess r)
+    {
+        var active = _selected?.AppAccessId == r.AppAccessId;
+        return "flex w-full items-center justify-between px-5 py-3 text-left text-sm transition-colors " + (active
+            ? "bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-200"
+            : "text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/40");
+    }
+}
