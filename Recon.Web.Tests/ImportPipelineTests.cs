@@ -51,7 +51,7 @@ public class ImportPipelineTests : IAsyncLifetime
     private async Task<ImportOutcome> Import(string fileName)
     {
         var svc = _sp.GetRequiredService<IImportService>();
-        await using var fs = File.OpenRead(Path.Combine(SharedFiles, fileName));
+        await using var fs = new FileStream(Path.Combine(SharedFiles, fileName), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return await svc.ImportAsync(fs, fileName, "2026-03");
     }
 
@@ -92,13 +92,17 @@ public class ImportPipelineTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Duplicate_upload_is_rejected_by_content_hash()
+    public async Task Duplicate_upload_reuses_the_existing_parsed_batch()
     {
         var first = await Import("Copy of T464.xlsx");
         Assert.True(first.Success);
         var second = await Import("Copy of T464.xlsx");
-        Assert.False(second.Success);
+        Assert.True(second.Success, second.Error);
         Assert.True(second.Duplicate);
+        Assert.Equal(first.ImportBatchId, second.ImportBatchId);
+
+        var db = await _sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync();
+        Assert.Equal(1, await db.ImportBatches.CountAsync());
     }
 
     private sealed class TestCurrentUser : ICurrentUserService

@@ -16,6 +16,7 @@
         if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');
     </script>
     <link rel="stylesheet" href="_content/Flowbite/flowbite.min.css" />
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/default-base.css" />
     <link rel="stylesheet" href="@Assets["css/app.min.css"]" />
     <link rel="stylesheet" href="@Assets["Recon.Web.styles.css"]" />
     <ImportMap />
@@ -26,6 +27,7 @@
 <body class="h-full bg-gray-50 dark:bg-gray-900 antialiased">
     <Routes @rendermode="InteractiveServer" />
     <script src="_content/Flowbite/flowbite.js"></script>
+    <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
     <script src="_framework/blazor.web.js"></script>
 </body>
 

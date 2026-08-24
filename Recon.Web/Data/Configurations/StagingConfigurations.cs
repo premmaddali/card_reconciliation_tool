@@ -64,3 +64,18 @@ public class StgGlEntryConfiguration : IEntityTypeConfiguration<StgGlEntry>
         b.HasIndex(x => x.ImportBatchId);
     }
 }
+
+public class StgGlBulkPostingConfiguration : IEntityTypeConfiguration<StgGlBulkPosting>
+{
+    public void Configure(EntityTypeBuilder<StgGlBulkPosting> b)
+    {
+        b.HasKey(x => x.StgGlBulkPostingId);
+        foreach (var p in new[] { nameof(StgGlBulkPosting.Debit), nameof(StgGlBulkPosting.Credit), nameof(StgGlBulkPosting.TranAmt),
+                     nameof(StgGlBulkPosting.Rate), nameof(StgGlBulkPosting.MurAmt) })
+            b.Property(p).HasColumnType("decimal(19,4)");
+        b.HasIndex(x => x.GlSubHeadCode);
+        b.HasIndex(x => x.TranDate);
+        b.HasIndex(x => x.ImportBatchId);
+        b.HasIndex(x => x.AcctNum);
+    }
+}

@@ -11,8 +11,13 @@ public class ReconMatchConfiguration : IEntityTypeConfiguration<ReconMatch>
         b.HasKey(x => x.ReconMatchId);
         b.Property(x => x.MatchStatus).HasConversion<byte>();
         b.Property(x => x.ProcessorSource).HasConversion<byte>();
+        b.Property(x => x.SettlementLeg).HasConversion<byte>().HasDefaultValue(ReconSettlementLeg.DebitCardholder);
         b.Property(x => x.ReferenceNumber).HasMaxLength(32);
-        b.Property(x => x.ProcessorAccountNumber).HasMaxLength(64);
+        b.Property(x => x.ProcessorAccountNumber).HasMaxLength(128);
+        b.Property(x => x.ProcessorProductType).HasMaxLength(4);
+        b.Property(x => x.ProcessorMerchant).HasMaxLength(256);
+        b.Property(x => x.ProcessorDescription).HasMaxLength(512);
+        b.Property(x => x.GlDescription).HasMaxLength(512);
         b.Property(x => x.GlAccountNumber).HasMaxLength(20);
         b.Property(x => x.Confidence).HasColumnType("decimal(5,2)");
         b.Property(x => x.ScoreBreakdown).HasMaxLength(200);
@@ -31,8 +36,9 @@ public class ReconExceptionConfiguration : IEntityTypeConfiguration<ReconExcepti
         b.HasKey(x => x.ReconExceptionId);
         b.Property(x => x.ExceptionType).HasConversion<byte>();
         b.Property(x => x.Status).HasConversion<byte>();
+        b.Property(x => x.SettlementLeg).HasConversion<byte>().HasDefaultValue(ReconSettlementLeg.DebitCardholder);
         b.Property(x => x.ReferenceNumber).HasMaxLength(32);
-        b.Property(x => x.ProcessorAccountNumber).HasMaxLength(64);
+        b.Property(x => x.ProcessorAccountNumber).HasMaxLength(128);
         b.Property(x => x.GlAccountNumber).HasMaxLength(20);
         b.Property(x => x.Narrative).HasMaxLength(512);
         b.Property(x => x.Confidence).HasColumnType("decimal(5,2)");
@@ -62,7 +68,24 @@ public class ReconPassSummaryConfiguration : IEntityTypeConfiguration<ReconPassS
             b.Property(p).HasColumnType("decimal(19,4)");
         b.Property(x => x.AverageConfidence).HasColumnType("decimal(5,2)");
         b.HasOne(x => x.ReconRun).WithMany().HasForeignKey(x => x.ReconRunId);
-        b.HasIndex(x => new { x.ReconRunId, x.Ccy, x.Day });
+        b.Property(x => x.SettlementLeg).HasConversion<byte>().HasDefaultValue(ReconSettlementLeg.DebitCardholder);
+        b.HasIndex(x => new { x.ReconRunId, x.SettlementLeg, x.Ccy, x.Day });
+    }
+}
+
+public class AtmNetworkValidationConfiguration : IEntityTypeConfiguration<AtmNetworkValidation>
+{
+    public void Configure(EntityTypeBuilder<AtmNetworkValidation> b)
+    {
+        b.HasKey(x => x.AtmNetworkValidationId);
+        b.Property(x => x.Status).HasConversion<byte>();
+        b.Property(x => x.ReferenceNumber).HasMaxLength(32);
+        b.Property(x => x.Narrative).HasMaxLength(512);
+        foreach (var property in new[] { nameof(AtmNetworkValidation.NetworkAmount), nameof(AtmNetworkValidation.NetworkFee), nameof(AtmNetworkValidation.AtmAmount), nameof(AtmNetworkValidation.AtmFee) })
+            b.Property(property).HasColumnType("decimal(19,4)");
+        b.HasOne<Recon.Web.Domain.Import.ReconRun>().WithMany().HasForeignKey(x => x.ReconRunId).OnDelete(DeleteBehavior.Cascade);
+        b.HasIndex(x => new { x.ReconRunId, x.Status });
+        b.HasIndex(x => new { x.ReconRunId, x.ReferenceNumber });
     }
 }
 

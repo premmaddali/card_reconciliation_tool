@@ -13,6 +13,7 @@ public class ReconPassSummary
     public ReconRun ReconRun { get; set; } = null!;
 
     public int Ccy { get; set; }
+    public ReconSettlementLeg SettlementLeg { get; set; }
     /// <summary>Null = monthly roll-up for the run; set = that day's roll-up.</summary>
     public DateOnly? Day { get; set; }
 

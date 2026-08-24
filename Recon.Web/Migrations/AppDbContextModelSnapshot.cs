@@ -528,6 +528,9 @@ namespace Recon.Web.Migrations
                     b.Property<int>("RowCount")
                         .HasColumnType("int");
 
+                    b.Property<int?>("SchemeProfileId")
+                        .HasColumnType("int");
+
                     b.Property<byte>("SourceType")
                         .HasColumnType("tinyint");
 
@@ -541,6 +544,8 @@ namespace Recon.Web.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("ImportBatchId");
+
+                    b.HasIndex("SchemeProfileId");
 
                     b.HasIndex("SourceType", "ContentHash")
                         .IsUnique();
@@ -570,17 +575,27 @@ namespace Recon.Web.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<int?>("CurrentWorkflowStepId")
+                        .HasColumnType("int");
+
                     b.Property<int>("ExceptionCount")
                         .HasColumnType("int");
 
                     b.Property<byte>("Function")
                         .HasColumnType("tinyint");
 
-                    b.Property<int>("GlBatchId")
+                    b.Property<int?>("GlBatchId")
                         .HasColumnType("int");
 
                     b.Property<int>("MatchedCount")
                         .HasColumnType("int");
+
+                    b.Property<int?>("NetworkBatchId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NextAction")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
 
                     b.Property<DateOnly?>("PeriodEnd")
                         .HasColumnType("date");
@@ -599,6 +614,13 @@ namespace Recon.Web.Migrations
                     b.Property<int>("ProcessorCount")
                         .HasColumnType("int");
 
+                    b.Property<string>("ResponsibleActor")
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<int?>("SchemeProfileId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("StartedDate")
                         .HasColumnType("datetime2");
 
@@ -611,15 +633,95 @@ namespace Recon.Web.Migrations
                     b.Property<DateTime?>("UpdatedDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<byte>("VerificationStatus")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int?>("WorkflowDefinitionId")
+                        .HasColumnType("int");
+
                     b.HasKey("ReconRunId");
 
                     b.HasIndex("GlBatchId");
 
+                    b.HasIndex("NetworkBatchId");
+
                     b.HasIndex("ProcessorBatchId");
+
+                    b.HasIndex("SchemeProfileId");
 
                     b.HasIndex("Function", "PeriodKey");
 
+                    b.HasIndex("VerificationStatus", "CurrentWorkflowStepId");
+
                     b.ToTable("ReconRuns");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.AtmNetworkValidation", b =>
+                {
+                    b.Property<int>("AtmNetworkValidationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("AtmNetworkValidationId"));
+
+                    b.Property<decimal?>("AtmAmount")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("AtmCcy")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("AtmDate")
+                        .HasColumnType("date");
+
+                    b.Property<decimal?>("AtmFee")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int>("AtmReferenceCount")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("AtmStagingId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Narrative")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<decimal?>("NetworkAmount")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("NetworkCcy")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("NetworkDate")
+                        .HasColumnType("date");
+
+                    b.Property<decimal?>("NetworkFee")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int>("NetworkReferenceCount")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("NetworkStagingId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<byte>("Status")
+                        .HasColumnType("tinyint");
+
+                    b.HasKey("AtmNetworkValidationId");
+
+                    b.HasIndex("ReconRunId", "ReferenceNumber");
+
+                    b.HasIndex("ReconRunId", "Status");
+
+                    b.ToTable("AtmNetworkValidations");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.GlSettlementAccount", b =>
@@ -711,8 +813,8 @@ namespace Recon.Web.Migrations
                         .HasColumnType("nvarchar(512)");
 
                     b.Property<string>("ProcessorAccountNumber")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<int>("ReconRunId")
                         .HasColumnType("int");
@@ -726,6 +828,11 @@ namespace Recon.Web.Migrations
 
                     b.Property<DateTime?>("ResolvedDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<byte?>("SettlementLeg")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint")
+                        .HasDefaultValue((byte)1);
 
                     b.Property<byte>("Status")
                         .HasColumnType("tinyint");
@@ -813,6 +920,13 @@ namespace Recon.Web.Migrations
                     b.Property<DateOnly?>("GlDate")
                         .HasColumnType("date");
 
+                    b.Property<string>("GlDescription")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTime?>("GlPostingDateTime")
+                        .HasColumnType("datetime2");
+
                     b.Property<int?>("GlStagingId")
                         .HasColumnType("int");
 
@@ -830,8 +944,8 @@ namespace Recon.Web.Migrations
                         .HasColumnType("tinyint");
 
                     b.Property<string>("ProcessorAccountNumber")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<decimal?>("ProcessorAmount")
                         .HasColumnType("decimal(19,4)");
@@ -842,11 +956,26 @@ namespace Recon.Web.Migrations
                     b.Property<DateOnly?>("ProcessorDate")
                         .HasColumnType("date");
 
+                    b.Property<string>("ProcessorDescription")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("ProcessorMerchant")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("ProcessorProductType")
+                        .HasMaxLength(4)
+                        .HasColumnType("nvarchar(4)");
+
                     b.Property<byte>("ProcessorSource")
                         .HasColumnType("tinyint");
 
                     b.Property<int>("ProcessorStagingId")
                         .HasColumnType("int");
+
+                    b.Property<DateTime?>("ProcessorTransactionDateTime")
+                        .HasColumnType("datetime2");
 
                     b.Property<int>("ReconRunId")
                         .HasColumnType("int");
@@ -867,6 +996,11 @@ namespace Recon.Web.Migrations
 
                     b.Property<int?>("SettlementCcy")
                         .HasColumnType("int");
+
+                    b.Property<byte>("SettlementLeg")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint")
+                        .HasDefaultValue((byte)1);
 
                     b.HasKey("ReconMatchId");
 
@@ -907,11 +1041,173 @@ namespace Recon.Web.Migrations
                     b.Property<int>("ReconRunId")
                         .HasColumnType("int");
 
+                    b.Property<byte>("SettlementLeg")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint")
+                        .HasDefaultValue((byte)1);
+
                     b.HasKey("ReconPassSummaryId");
 
-                    b.HasIndex("ReconRunId", "Ccy", "Day");
+                    b.HasIndex("ReconRunId", "SettlementLeg", "Ccy", "Day");
 
                     b.ToTable("ReconPassSummaries");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowActor", b =>
+                {
+                    b.Property<int>("ReconWorkflowActorId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconWorkflowActorId"));
+
+                    b.Property<int>("AppAccessId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ReconWorkflowStepId")
+                        .HasColumnType("int");
+
+                    b.Property<byte>("Status")
+                        .HasColumnType("tinyint");
+
+                    b.HasKey("ReconWorkflowActorId");
+
+                    b.HasIndex("AppAccessId", "Status");
+
+                    b.HasIndex("ReconRunId", "ReconWorkflowStepId", "AppAccessId")
+                        .IsUnique();
+
+                    b.ToTable("ReconWorkflowActors");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowDefinition", b =>
+                {
+                    b.Property<int>("ReconWorkflowDefinitionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconWorkflowDefinitionId"));
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ReconWorkflowDefinitionId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("ReconWorkflowDefinitions");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowHistory", b =>
+                {
+                    b.Property<int>("ReconWorkflowHistoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconWorkflowHistoryId"));
+
+                    b.Property<byte>("Action")
+                        .HasColumnType("tinyint");
+
+                    b.Property<Guid>("ActionedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("ActionedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("AppAccessId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("ReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ReconWorkflowStepId")
+                        .HasColumnType("int");
+
+                    b.HasKey("ReconWorkflowHistoryId");
+
+                    b.HasIndex("ReconRunId", "ActionedDate");
+
+                    b.ToTable("ReconWorkflowHistories");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowStep", b =>
+                {
+                    b.Property<int>("ReconWorkflowStepId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconWorkflowStepId"));
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("ReconWorkflowDefinitionId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("StepOrder")
+                        .HasColumnType("int");
+
+                    b.HasKey("ReconWorkflowStepId");
+
+                    b.HasIndex("ReconWorkflowDefinitionId", "StepOrder")
+                        .IsUnique();
+
+                    b.ToTable("ReconWorkflowSteps");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowStepRole", b =>
+                {
+                    b.Property<int>("ReconWorkflowStepRoleId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconWorkflowStepRoleId"));
+
+                    b.Property<int>("AppAccessId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ReconWorkflowStepId")
+                        .HasColumnType("int");
+
+                    b.HasKey("ReconWorkflowStepRoleId");
+
+                    b.HasIndex("AppAccessId");
+
+                    b.HasIndex("ReconWorkflowStepId", "AppAccessId")
+                        .IsUnique();
+
+                    b.ToTable("ReconWorkflowStepRoles");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Reference.IsoCurrency", b =>
@@ -1036,6 +1332,102 @@ namespace Recon.Web.Migrations
                     b.HasIndex("Channel", "ReferenceNumber");
 
                     b.ToTable("StgDebitSettlements");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Staging.StgGlBulkPosting", b =>
+                {
+                    b.Property<int>("StgGlBulkPostingId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("StgGlBulkPostingId"));
+
+                    b.Property<string>("AcctName")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("AcctNum")
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<decimal?>("Credit")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("Debit")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("EntryDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("EntryUserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("GlAccount")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("GlSubHeadCode")
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<int>("ImportBatchId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("MurAmt")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("PartTranSrlNum")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("Rate")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("RefNum")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SolId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("SourceRowNumber")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("TranAmt")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("TranCcyCode")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateOnly?>("TranDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("TranId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("TranParticular")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("TranParticular2")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("TranParticularCode")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("TranRmks")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("VfdDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("VfdUserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("StgGlBulkPostingId");
+
+                    b.HasIndex("AcctNum");
+
+                    b.HasIndex("GlSubHeadCode");
+
+                    b.HasIndex("ImportBatchId");
+
+                    b.HasIndex("TranDate");
+
+                    b.ToTable("StgGlBulkPostings");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Staging.StgGlEntry", b =>
@@ -1336,6 +1728,281 @@ namespace Recon.Web.Migrations
                     b.ToTable("StgNetworkT464");
                 });
 
+            modelBuilder.Entity("Recon.Web.Platform.Model.NormalizedGlEntry", b =>
+                {
+                    b.Property<long>("NormalizedGlEntryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("NormalizedGlEntryId"));
+
+                    b.Property<string>("Account")
+                        .HasMaxLength(48)
+                        .HasColumnType("nvarchar(48)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int>("Currency")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DebitCreditIndicator")
+                        .HasMaxLength(2)
+                        .HasColumnType("nvarchar(2)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<int>("ImportBatchId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsCash")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPos")
+                        .HasColumnType("bit");
+
+                    b.Property<DateOnly?>("PostingDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("PostingDateTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<byte>("SettlementLeg")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int>("SourceRowNumber")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SourceStagingId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceTable")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("NormalizedGlEntryId");
+
+                    b.HasIndex("ImportBatchId", "Account");
+
+                    b.HasIndex("ImportBatchId", "Reference");
+
+                    b.ToTable("NormalizedGlEntries", (string)null);
+                });
+
+            modelBuilder.Entity("Recon.Web.Platform.Model.NormalizedTransaction", b =>
+                {
+                    b.Property<long>("NormalizedTransactionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("NormalizedTransactionId"));
+
+                    b.Property<string>("Account")
+                        .HasMaxLength(48)
+                        .HasColumnType("nvarchar(48)");
+
+                    b.Property<string>("Acquirer")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("AuthorizationCode")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("BatchNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<decimal?>("BillingAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("BillingCurrency")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CardType")
+                        .HasMaxLength(8)
+                        .HasColumnType("nvarchar(8)");
+
+                    b.Property<int?>("Currency")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DebitCreditIndicator")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("ImportBatchId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsCash")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPos")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Issuer")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("MaskedCardNumber")
+                        .HasMaxLength(48)
+                        .HasColumnType("nvarchar(48)");
+
+                    b.Property<string>("Merchant")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateOnly?>("PostingDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Processor")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Scheme")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<decimal?>("SettlementAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("SettlementCurrency")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("SettlementDate")
+                        .HasColumnType("date");
+
+                    b.Property<byte>("SettlementLeg")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int>("SourceRowNumber")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SourceStagingId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceTable")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Terminal")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("TraceNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateOnly?>("TransactionDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("TransactionDateTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TransactionType")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("NormalizedTransactionId");
+
+                    b.HasIndex("ImportBatchId", "Reference");
+
+                    b.HasIndex("ImportBatchId", "Currency", "Amount");
+
+                    b.ToTable("NormalizedTransactions", (string)null);
+                });
+
+            modelBuilder.Entity("Recon.Web.Platform.Model.SchemeProfile", b =>
+                {
+                    b.Property<int>("SchemeProfileId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("SchemeProfileId"));
+
+                    b.Property<string>("Cms")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("DateToleranceDaysOverride")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Functions")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("GlcAdapterCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal?>("MatchThresholdOverride")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("decimal(5,2)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Scheme")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TransactionAdapterCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("SchemeProfileId");
+
+                    b.HasIndex("Scheme", "Cms")
+                        .IsUnique();
+
+                    b.ToTable("SchemeProfiles", (string)null);
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Recon.Web.Domain.Identity.AppRole", null)
@@ -1450,8 +2117,12 @@ namespace Recon.Web.Migrations
                     b.HasOne("Recon.Web.Domain.Import.ImportBatch", "GlBatch")
                         .WithMany()
                         .HasForeignKey("GlBatchId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Recon.Web.Domain.Import.ImportBatch", "NetworkBatch")
+                        .WithMany()
+                        .HasForeignKey("NetworkBatchId")
+                        .OnDelete(DeleteBehavior.NoAction);
 
                     b.HasOne("Recon.Web.Domain.Import.ImportBatch", "ProcessorBatch")
                         .WithMany()
@@ -1461,7 +2132,18 @@ namespace Recon.Web.Migrations
 
                     b.Navigation("GlBatch");
 
+                    b.Navigation("NetworkBatch");
+
                     b.Navigation("ProcessorBatch");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.AtmNetworkValidation", b =>
+                {
+                    b.HasOne("Recon.Web.Domain.Import.ReconRun", null)
+                        .WithMany()
+                        .HasForeignKey("ReconRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconException", b =>
@@ -1508,6 +2190,36 @@ namespace Recon.Web.Migrations
                     b.Navigation("ReconRun");
                 });
 
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowStep", b =>
+                {
+                    b.HasOne("Recon.Web.Domain.Recon.ReconWorkflowDefinition", "WorkflowDefinition")
+                        .WithMany("Steps")
+                        .HasForeignKey("ReconWorkflowDefinitionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("WorkflowDefinition");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowStepRole", b =>
+                {
+                    b.HasOne("Recon.Web.Domain.Identity.AppAccess", "AppAccess")
+                        .WithMany()
+                        .HasForeignKey("AppAccessId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Recon.Web.Domain.Recon.ReconWorkflowStep", "WorkflowStep")
+                        .WithMany("Roles")
+                        .HasForeignKey("ReconWorkflowStepId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AppAccess");
+
+                    b.Navigation("WorkflowStep");
+                });
+
             modelBuilder.Entity("Recon.Web.Domain.Identity.AppAccess", b =>
                 {
                     b.Navigation("Menus");
@@ -1528,6 +2240,16 @@ namespace Recon.Web.Migrations
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconException", b =>
                 {
                     b.Navigation("Comments");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowDefinition", b =>
+                {
+                    b.Navigation("Steps");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowStep", b =>
+                {
+                    b.Navigation("Roles");
                 });
 #pragma warning restore 612, 618
         }

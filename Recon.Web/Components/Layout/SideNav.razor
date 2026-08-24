@@ -1,5 +1,6 @@
 @inject IPermissionService Permissions
 @inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
 @inject Microsoft.EntityFrameworkCore.IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @using Recon.Web.Services
 @using Microsoft.EntityFrameworkCore
@@ -11,7 +12,7 @@
         </div>
         <div class="leading-tight @(Collapsed ? "hidden" : "")">
             <p class="text-sm font-semibold text-gray-900 dark:text-white">Recon Tool</p>
-            <p class="text-[11px] text-gray-500 dark:text-gray-400">MasterCard · BankOne</p>
+            <p class="text-[11px] text-gray-500 dark:text-gray-400">Multi-scheme platform</p>
         </div>
     </div>
 
@@ -24,7 +25,39 @@
                     <p class="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 @(Collapsed ? "hidden" : "")">@group.Key.GroupName</p>
                 }
                 <div class="space-y-0.5">
-                    @foreach (var item in group)
+                    @* Scheme groups (no route) render as collapsible headers with their children nested. *@
+                    @foreach (var item in group.Where(m => m.Route is null))
+                    {
+                        var schemeCode = item.PageName;
+                        var expanded = _expanded.Contains(schemeCode) || group.Any(c => c.Route == _activeRoute);
+                        <div @key="@item.PageName">
+                            <button type="button" @onclick="() => Toggle(schemeCode)" title="@(Collapsed ? item.PageName : null)"
+                                    class="@NavLinkClass() w-full text-left">
+                                @NavIcon(item.Icon)
+                                <span class="flex-1 @(Collapsed ? "hidden" : "")">@item.PageName</span>
+                                <svg class="@(Collapsed ? "hidden" : "") h-4 w-4 shrink-0 transition-transform duration-200 @(expanded ? "rotate-90" : "")"
+                                     viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                    <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                            @if (expanded && !Collapsed)
+                            {
+                                <div class="ml-6 space-y-0.5 border-l border-gray-200 pl-2 dark:border-gray-700">
+                                    @foreach (var child in group.Where(m => m.Route is not null && IsChildOf(group, item, m)))
+                                    {
+                                        <NavLink @key="child.Route" href="@child.Route" Match="NavLinkMatch.Prefix"
+                                                 class="group flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+                                                 ActiveClass="!bg-primary-50 !text-primary-700 dark:!bg-primary-900/40 dark:!text-primary-200">
+                                            @NavIcon(child.Icon)
+                                            <span>@child.PageName</span>
+                                        </NavLink>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    @* Top-level routed items (Dashboard, Exceptions, …) render as before. *@
+                    @foreach (var item in group.Where(m => m.Route is not null && !HasSchemeParent(group, m)))
                     {
                         <NavLink @key="item.Route" href="@item.Route" Match="@(item.Route == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)"
                                  title="@(Collapsed ? item.PageName : null)"
@@ -55,6 +88,21 @@
     private IReadOnlyList<MenuItem> _menu = [];
     private string _fullName = "";
     private string _roleLabel = "";
+    private string? _activeRoute;
+    private HashSet<string> _expanded = new();
+
+    private void Toggle(string schemeName)
+    {
+        if (!_expanded.Remove(schemeName)) _expanded.Add(schemeName);
+    }
+
+    /// <summary>True when the child belongs to the scheme header (same group, not the header itself).</summary>
+    private static bool IsChildOf(IEnumerable<MenuItem> group, MenuItem header, MenuItem child) =>
+        child.Route is not null && !ReferenceEquals(child, header);
+
+    /// <summary>True when the item's parent is a scheme header (routed scheme children are rendered nested).</summary>
+    private bool HasSchemeParent(IGrouping<object, MenuItem> group, MenuItem item) =>
+        group.Any(m => m.Route is null && !ReferenceEquals(m, item));
 
     private string NavLinkClass() => "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white" + (Collapsed ? " justify-center" : "");
 
@@ -64,6 +112,7 @@
         "atm" => @<RocketIcon Class="h-5 w-5 shrink-0" />,
         "pos" => @<TableRowIcon Class="h-5 w-5 shrink-0" />,
         "bulk" => @<ChartIcon Class="h-5 w-5 shrink-0" />,
+        "analysis" => @<ChartIcon Class="h-5 w-5 shrink-0" />,
         "alert" => @<ExclamationTriangleIcon Class="h-5 w-5 shrink-0" />,
         "import" => @<FileImportIcon Class="h-5 w-5 shrink-0" />,
         "list" => @<ListIcon Class="h-5 w-5 shrink-0" />,
@@ -79,6 +128,8 @@
         if (!Guid.TryParse(idClaim, out var userId)) return;
 
         _menu = await Permissions.GetMenuAsync(userId);
+        _activeRoute = Nav.Uri;
+        Nav.LocationChanged += (_, e) => { _activeRoute = e.Location; InvokeAsync(StateHasChanged); };
 
         await using var db = await DbFactory.CreateDbContextAsync();
         var info = await db.Users

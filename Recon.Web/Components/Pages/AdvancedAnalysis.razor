@@ -1,0 +1,235 @@
+@page "/analysis"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+
+<PageTitle>Advanced analysis · Recon Tool</PageTitle>
+
+<PageHeader Title="Advanced analysis" Subtitle="Explore a completed reconciliation with server-side sorting and advanced column filters" Eyebrow="Reconciliation" Icon="bulk"
+            Breadcrumbs="@(new[] { "Reconciliation", "Advanced analysis" })" />
+
+<div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Completed reconciliation batches</label>
+    <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+        <table class="min-w-full text-left text-sm"><thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400"><tr><th class="px-4 py-3">Batch</th><th class="px-4 py-3">Period</th><th class="px-4 py-3">Created</th><th class="px-4 py-3 text-right">Action</th></tr></thead><tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+        @foreach (var batch in _batches)
+        {
+            <tr class="@(batch.RunId == _activeRunId ? "bg-primary-50 dark:bg-primary-950/30" : "")"><td class="px-4 py-3 font-medium">#@batch.RunId · @batch.Function</td><td class="px-4 py-3">@batch.Period</td><td class="px-4 py-3">@batch.Created.ToString("dd MMM yyyy HH:mm")</td><td class="px-4 py-3 text-right"><button type="button" @onclick="() => OpenBatch(batch.RunId)" class="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700">Open analysis</button></td></tr>
+        }
+        </tbody></table>
+    </div>
+    @if (_activeRunId.HasValue)
+    {
+        <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">Use each column’s filter button to combine rules such as “transaction date after”, “confidence greater than”, or “difference less than”. Only the requested page is loaded from the database.</p>
+    }
+</div>
+
+@if (_activeRunId.HasValue)
+{
+    <div class="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="overflow-x-auto p-2">
+            <RadzenDataGrid @key="_activeRunId" @ref="_grid" TItem="AnalysisRow" Data="@_rows" Count="@_rowCount" LoadData="@LoadData"
+                            IsLoading="@_loading" AllowPaging="true" PageSize="50" AllowSorting="true" AllowFiltering="true"
+                            FilterMode="FilterMode.Advanced" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowColumnResize="true"
+                            AllowColumnPicking="true" ColumnWidth="170px" ShowPagingSummary="true" class="recon-analysis-grid">
+                <Columns>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="Result" Title="Result" Width="155px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ReferenceNumber" Title="Reference" Width="145px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorTransactionDateTime" Title="Transaction date / time" Width="185px" FormatString="{0:dd MMM yyyy HH:mm}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorAccountNumber" Title="Processor account" Width="155px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorProductType" Title="Card type" Width="120px">
+                        <Template Context="row">@ProductTypeText(row.ProcessorProductType)</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="SettlementLeg" Title="Settlement leg" Width="165px">
+                        <Template Context="row">@LegText(row.SettlementLeg)</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorMerchant" Title="Merchant" Width="190px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorDescription" Title="Processor description" Width="250px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlAccountNumber" Title="GL account" Width="145px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlDescription" Title="GL description" Width="290px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorAmount" Title="Txn amount" Width="125px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorCcy" Title="Txn ccy" Width="105px"><Template Context="row">@CcyName(row.ProcessorCcy)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="BillingAmount" Title="Billing amount" Width="130px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="BillingCcy" Title="Billing ccy" Width="105px"><Template Context="row">@CcyName(row.BillingCcy)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="SettlementAmount" Title="Settlement amount" Width="145px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="SettlementCcy" Title="Settlement ccy" Width="115px"><Template Context="row">@CcyName(row.SettlementCcy)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="ReconciliationAmount" Title="Recon amount" Width="130px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="Ccy" Title="Recon ccy" Width="105px"><Template Context="row">@CcyName(row.Ccy)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlPostingDateTime" Title="GL posting date / time" Width="185px" FormatString="{0:dd MMM yyyy HH:mm}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlAmount" Title="GL amount" Width="125px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlCcy" Title="GL ccy" Width="105px"><Template Context="row">@CcyName(row.GlCcy)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="Difference" Title="Difference" Width="120px" TextAlign="Radzen.TextAlign.Right" FormatString="{0:N2}" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="MatchComment" Title="Match comment" Width="220px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="Confidence" Title="Confidence" Width="115px" TextAlign="Radzen.TextAlign.Right"><Template Context="row">@row.Confidence.ToString("0.0")%</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="AnalysisRow" Title="Evidence" Width="110px" Sortable="false" Filterable="false" Frozen="true" FrozenPosition="FrozenColumnPosition.Right">
+                        <Template Context="row"><button type="button" @onclick="() => OpenEvidence(row)" class="rounded-lg border border-primary-200 px-2.5 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50 dark:border-primary-700 dark:text-primary-300">View evidence</button></Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </div>
+    </div>
+}
+
+@if (_evidence is not null)
+{
+    <div class="fixed inset-0 z-50 flex justify-end bg-slate-900/30" role="dialog" aria-modal="true" aria-label="Match evidence" @onclick="CloseEvidence">
+        <aside class="h-full w-full max-w-xl overflow-y-auto border-l border-gray-200 bg-white p-6 shadow-2xl dark:border-gray-700 dark:bg-gray-800" @onclick:stopPropagation="true">
+            <div class="flex items-start justify-between gap-4">
+                <div><p class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Evidence</p><h2 class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">@(_evidence.Result) · @_evidence.ReferenceNumber</h2></div>
+                <button type="button" aria-label="Close evidence" @onclick="CloseEvidence" class="rounded-lg p-2 text-xl text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700">×</button>
+            </div>
+            <div class="mt-6 grid grid-cols-[auto_1fr] gap-x-5 gap-y-3 text-sm">
+                <span class="text-gray-500 dark:text-gray-400">Processor row</span><span class="font-mono">@_evidence.ProcessorStagingId</span>
+                <span class="text-gray-500 dark:text-gray-400">GL row</span><span class="font-mono">@(_evidence.GlStagingId?.ToString() ?? "No GL row")</span>
+                <span class="text-gray-500 dark:text-gray-400">Processor account</span><span class="font-mono">@(_evidence.ProcessorAccountNumber ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">GL account</span><span class="font-mono">@(_evidence.GlAccountNumber ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">Transaction date</span><span>@(_evidence.ProcessorTransactionDateTime?.ToString("dd MMM yyyy HH:mm") ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">GL posting date</span><span>@(_evidence.GlPostingDateTime?.ToString("dd MMM yyyy HH:mm") ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">Merchant</span><span>@(_evidence.ProcessorMerchant ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">Processor description</span><span>@(_evidence.ProcessorDescription ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">GL description</span><span>@(_evidence.GlDescription ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">Difference</span><span>@(_evidence.Difference?.ToString("N2") ?? "—")</span>
+                <span class="text-gray-500 dark:text-gray-400">Confidence</span><span>@_evidence.Confidence.ToString("0.0")%</span>
+            </div>
+            <div class="mt-6 rounded-lg bg-slate-50 p-4 dark:bg-gray-900"><p class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Why this result</p><p class="mt-2 text-sm text-gray-700 dark:text-gray-200">@(_evidence.ScoreBreakdown ?? "No score explanation was recorded.")</p></div>
+        </aside>
+    </div>
+}
+
+@code {
+    private sealed class BatchChoice { public int RunId { get; init; } public string Function { get; init; } = ""; public string Period { get; init; } = ""; public DateTime Created { get; init; } }
+
+    private sealed class AnalysisRow
+    {
+        public int ReconMatchId { get; init; }
+        public string Result { get; init; } = "";
+        public string? ReferenceNumber { get; init; }
+        public DateTime? ProcessorTransactionDateTime { get; init; }
+        public string? ProcessorAccountNumber { get; init; }
+        public string? ProcessorProductType { get; init; }
+        public ReconSettlementLeg SettlementLeg { get; init; }
+        public string? ProcessorMerchant { get; init; }
+        public string? ProcessorDescription { get; init; }
+        public string? GlAccountNumber { get; init; }
+        public string? GlDescription { get; init; }
+        public decimal? ProcessorAmount { get; init; }
+        public int? ProcessorCcy { get; init; }
+        public decimal? BillingAmount { get; init; }
+        public int? BillingCcy { get; init; }
+        public decimal? SettlementAmount { get; init; }
+        public int? SettlementCcy { get; init; }
+        public decimal? ReconciliationAmount { get; init; }
+        public int? Ccy { get; init; }
+        public DateTime? GlPostingDateTime { get; init; }
+        public decimal? GlAmount { get; init; }
+        public int? GlCcy { get; init; }
+        public decimal? Difference { get; init; }
+        public string? MatchComment { get; init; }
+        public decimal Confidence { get; init; }
+        public string? ScoreBreakdown { get; init; }
+        public int ProcessorStagingId { get; init; }
+        public int? GlStagingId { get; init; }
+    }
+
+    private List<BatchChoice> _batches = [];
+    private int? _selectedRunId, _activeRunId;
+    private RadzenDataGrid<AnalysisRow>? _grid;
+    private IEnumerable<AnalysisRow> _rows = [];
+    private int _rowCount;
+    private bool _loading;
+    private bool _reloadGridAfterRender;
+    private AnalysisRow? _evidence;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var runs = await db.ReconRuns.AsNoTracking().Where(r => r.Status == ReconRunStatus.Completed)
+            .OrderByDescending(r => r.CreatedDate).Take(100).ToListAsync();
+        _batches = runs.Select(r => new BatchChoice
+        {
+            RunId = r.ReconRunId,
+            Function = FunctionName(r.Function), Period = r.PeriodKey, Created = r.CreatedDate
+        }).ToList();
+    }
+
+    private Task OpenBatch(int runId)
+    {
+        _selectedRunId = runId;
+        _activeRunId = runId;
+        _rows = [];
+        _rowCount = 0;
+        _reloadGridAfterRender = true;
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadGridAfterRender || _grid is null) return;
+        _reloadGridAfterRender = false;
+        await _grid.Reload();
+    }
+
+    private async Task LoadData(LoadDataArgs args)
+    {
+        if (!_activeRunId.HasValue) return;
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            IQueryable<AnalysisRow> query = db.ReconMatches.AsNoTracking()
+                .Where(m => m.ReconRunId == _activeRunId.Value)
+                .Select(m => new AnalysisRow
+                {
+                    ReconMatchId = m.ReconMatchId,
+                    Result = m.MatchStatus == MatchStatus.Matched ? "Matched" : m.MatchStatus == MatchStatus.AmountMismatch ? "Amount mismatch" : m.MatchStatus == MatchStatus.UnmatchedProcessor ? "No GL match" : "Other",
+                    ReferenceNumber = m.ReferenceNumber,
+                    ProcessorTransactionDateTime = m.ProcessorTransactionDateTime,
+                    ProcessorAccountNumber = m.ProcessorAccountNumber,
+                    ProcessorProductType = m.ProcessorProductType,
+                    SettlementLeg = m.SettlementLeg,
+                    ProcessorMerchant = m.ProcessorMerchant,
+                    ProcessorDescription = m.ProcessorDescription,
+                    GlAccountNumber = m.GlAccountNumber,
+                    GlDescription = m.GlDescription,
+                    ProcessorAmount = m.ProcessorAmount,
+                    ProcessorCcy = m.ProcessorCcy,
+                    BillingAmount = m.BillingAmount,
+                    BillingCcy = m.BillingCcy,
+                    SettlementAmount = m.SettlementAmount,
+                    SettlementCcy = m.SettlementCcy,
+                    ReconciliationAmount = m.ReconciliationAmount,
+                    Ccy = m.Ccy,
+                    GlPostingDateTime = m.GlPostingDateTime,
+                    GlAmount = m.GlAmount,
+                    GlCcy = m.GlCcy,
+                    Difference = m.ReconciliationAmount != null && m.GlAmount != null ? Math.Abs(m.ReconciliationAmount.Value - m.GlAmount.Value) : null,
+                    MatchComment = m.MatchComment,
+                    Confidence = m.Confidence,
+                    ScoreBreakdown = m.ScoreBreakdown,
+                    ProcessorStagingId = m.ProcessorStagingId,
+                    GlStagingId = m.GlStagingId
+                });
+
+            if (_grid is not null && !string.IsNullOrWhiteSpace(args.Filter)) query = query.Where(_grid.ColumnsCollection);
+            if (!string.IsNullOrWhiteSpace(args.OrderBy)) query = query.OrderBy(args.OrderBy);
+            else query = query.OrderByDescending(x => x.ProcessorTransactionDateTime).ThenByDescending(x => x.Confidence);
+
+            _rowCount = await query.CountAsync();
+            _rows = await query.Skip(args.Skip ?? 0).Take(args.Top ?? 50).ToListAsync();
+        }
+        finally { _loading = false; }
+    }
+
+    private static string FunctionName(ReconFunction function) => function switch
+    {
+        ReconFunction.AtmToGl => "ATM recon",
+        ReconFunction.PosToGl => "POS recon",
+        _ => "Bulk recon"
+    };
+    private static string ProductTypeText(string? type) => type?.ToUpperInvariant() switch { "DC" => "DC · Debit", "CR" => "CR · Credit", _ => "—" };
+    private static string LegText(ReconSettlementLeg leg) => leg == ReconSettlementLeg.CreditIntermediary ? "Credit intermediary" : "Debit cardholder";
+    private static string CcyName(int? ccy) => ccy is null ? "—" : Recon.Web.Domain.Reference.IsoCurrencyCatalog.Display(ccy.Value);
+    private void OpenEvidence(AnalysisRow row) => _evidence = row;
+    private void CloseEvidence() => _evidence = null;
+}

@@ -1,0 +1,79 @@
+@page "/recon/scheme/{SchemeProfileId:int}/{Function}"
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Platform.Model
+@attribute [Authorize]
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+
+<PageTitle>@($"{_profile?.Scheme} {Label}") · Recon Tool</PageTitle>
+
+@if (_error is not null)
+{
+    <PageHeader Title="@_error" Eyebrow="Reconciliation" Icon="bulk" />
+}
+else if (_profile is not null && _function is not null)
+{
+    <ReconRunner Function="_function.Value"
+                 Title="@($"{_profile.Scheme} {Label}")"
+                 Subtitle="@($"Match {_profile.Scheme} transactions from {_profile.Cms} against the general ledger")"
+                 ShortName="@ShortName"
+                 ProcessorLabel="@ProcessorLabel"
+                 ProcessorSource="@ProcessorSource"
+                 BreadcrumbGroup="@_profile.Scheme"
+                 SchemeProfileId="@_profile.SchemeProfileId" />
+}
+
+@code {
+    [Parameter] public int SchemeProfileId { get; set; }
+    [Parameter] public string Function { get; set; } = "";
+
+    private SchemeProfile? _profile;
+    private ReconFunction? _function;
+    private string? _error;
+
+    private string Label => _function switch
+    {
+        ReconFunction.AtmToGl => "ATM recon",
+        ReconFunction.PosToGl => "POS recon",
+        ReconFunction.InterchangeToGl => "Bulk recon",
+        _ => Function
+    };
+    private string ShortName => _function switch
+    {
+        ReconFunction.AtmToGl => "ATM",
+        ReconFunction.PosToGl => "POS",
+        _ => "Bulk"
+    };
+    private string ProcessorLabel => _function switch
+    {
+        ReconFunction.AtmToGl => "ATM settlement",
+        ReconFunction.PosToGl => "POS settlement",
+        _ => "Interchange"
+    };
+    private SourceType ProcessorSource => _function switch
+    {
+        ReconFunction.AtmToGl => SourceType.AtmSettlement,
+        ReconFunction.PosToGl => SourceType.PosSettlement,
+        _ => SourceType.InterchangeFee
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _profile = await db.SchemeProfiles.FirstOrDefaultAsync(p => p.SchemeProfileId == SchemeProfileId && p.IsActive);
+        if (_profile is null) { _error = "Scheme not found or inactive."; return; }
+
+        var enabled = _profile.Functions.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (!enabled.Contains(Function, StringComparer.OrdinalIgnoreCase))
+        { _error = $"{Function} is not enabled for {_profile.Scheme}."; return; }
+
+        _function = Function switch
+        {
+            "AtmToGl" => ReconFunction.AtmToGl,
+            "PosToGl" => ReconFunction.PosToGl,
+            "InterchangeToGl" => ReconFunction.InterchangeToGl,
+            _ => null
+        };
+        if (_function is null) _error = $"Unknown reconciliation function '{Function}'.";
+    }
+}

@@ -1,0 +1,109 @@
+@page "/recon/scheme/{SchemeProfileId:int}"
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Platform.Model
+@attribute [Authorize]
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+
+<PageTitle>@(_profile?.Scheme ?? "Scheme") reconciliation · Recon Tool</PageTitle>
+
+<PageHeader Title="@($"{_profile?.Scheme} reconciliation")"
+            Subtitle="@($"Transactions from {_profile?.Cms} matched against the general ledger")"
+            Eyebrow="Reconciliation" Icon="bulk"
+            Breadcrumbs="@(new[] { "Reconciliation", _profile?.Scheme ?? "" })" />
+
+@if (_error is not null)
+{
+    <div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-300">@_error</div>
+}
+
+@if (_profile is not null)
+{
+    <!-- Function tabs -->
+    <div class="mb-5 flex flex-wrap gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        @foreach (var fn in _functions)
+        {
+            <button type="button" @onclick="() => _selected = fn"
+                    class="rounded-lg px-4 py-2 text-sm font-semibold transition-colors @(_selected == fn
+                        ? "bg-primary-600 text-white shadow-sm"
+                        : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700")">
+                @FunctionLabel(fn)
+            </button>
+        }
+    </div>
+
+    @if (_selected is not null)
+    {
+        <ReconRunner Function="_selected.Value"
+                     Title="@FunctionLabel(_selected.Value)"
+                     Subtitle="@SubtitleFor(_selected.Value)"
+                     ShortName="@ShortName(_selected.Value)"
+                     ProcessorLabel="@ProcessorLabel(_selected.Value)"
+                     ProcessorSource="@ProcessorSource(_selected.Value)" />
+    }
+}
+else if (_error is null)
+{
+    <p class="text-sm text-gray-500">Loading…</p>
+}
+
+@code {
+    [Parameter] public int SchemeProfileId { get; set; }
+
+    private SchemeProfile? _profile;
+    private List<ReconFunction> _functions = [];
+    private ReconFunction? _selected;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _profile = await db.SchemeProfiles.FirstOrDefaultAsync(p => p.SchemeProfileId == SchemeProfileId && p.IsActive);
+        if (_profile is null) { _error = "Scheme profile not found or inactive."; return; }
+
+        _functions = _profile.Functions
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(f => Enum.TryParse<ReconFunction>(f, out var fn) ? fn : (ReconFunction?)null)
+            .Where(f => f is not null).Select(f => f!.Value).ToList();
+        if (_functions.Count == 0) _functions.Add(ReconFunction.InterchangeToGl);
+        _selected = _functions[0];
+    }
+
+    private static string FunctionLabel(ReconFunction fn) => fn switch
+    {
+        ReconFunction.AtmToGl => "ATM → GL",
+        ReconFunction.PosToGl => "POS → GL",
+        ReconFunction.InterchangeToGl => "Bulk → GL",
+        _ => fn.ToString()
+    };
+
+    private static string ShortName(ReconFunction fn) => fn switch
+    {
+        ReconFunction.AtmToGl => "ATM",
+        ReconFunction.PosToGl => "POS",
+        _ => "Bulk"
+    };
+
+    private static string Subtitle(ReconFunction fn) => fn switch
+    {
+        ReconFunction.AtmToGl => "Match ATM settlement transactions to the GL cardholder-settlement (CASH) entries",
+        ReconFunction.PosToGl => "Match POS settlement transactions to the GL cardholder-settlement (POS) entries",
+        _ => "Match all interchange transactions to the GL cardholder-settlement entries"
+    };
+    private string SubtitleFor(ReconFunction fn) =>
+        $"{Subtitle(fn)} — {_profile?.Scheme} ({_profile?.Cms})";
+
+    private static string ProcessorLabel(ReconFunction fn) => fn switch
+    {
+        ReconFunction.AtmToGl => "ATM settlement",
+        ReconFunction.PosToGl => "POS settlement",
+        _ => "Interchange"
+    };
+
+    private static SourceType ProcessorSource(ReconFunction fn) => fn switch
+    {
+        ReconFunction.AtmToGl => SourceType.AtmSettlement,
+        ReconFunction.PosToGl => SourceType.PosSettlement,
+        _ => SourceType.InterchangeFee
+    };
+}

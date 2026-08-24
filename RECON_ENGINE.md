@@ -1,9 +1,18 @@
 # ReconTool — Reconciliation Engine Spec (MasterCard)
 
-The MasterCard reconciliation is **three independent functions**, each its own menu option. Every
-function matches one **processor file** against the **bank GL** using a **weighted confidence score**,
-then rolls results up **daily and monthly**. The engine is generic: sources, GL scope and weights are
-configuration, so other schemes can be added later.
+The MasterCard reconciliation has **four independent functions**, each its own menu option. ATM, POS,
+and Bulk match a processor file against the bank GL using a weighted confidence score. Network ↔ ATM
+validates the T464 network settlement file against ATM settlement by reference, amount, currency, and fee;
+it has no GL side. The engine is generic: sources, GL scope and weights are configuration, so other schemes
+can be added later.
+
+> **Platform note (branch `recon_platform`):** the engine now loads rows from the normalized platform
+> model (`NormalizedTransactions` / `NormalizedGlEntries`) when a batch has been projected, falling back
+> to the legacy BankOne loaders otherwise. All scheme-specific semantics (channel prefixes, MUR posting
+> convention, FX fallback chain, settlement-leg routing) moved into adapters + `NormalizedProjection`
+> (`Recon.Web/Platform/`); the matching math below is unchanged and scheme-agnostic. Runs and batches
+> carry a `SchemeProfileId` so each scheme's data is fully isolated. See
+> [PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md).
 
 ## The three functions
 
@@ -12,8 +21,10 @@ configuration, so other schemes can be added later.
 | **ATM Recon** | File 1 — ATM settlement | Cardholder-settlement rows where `TRAN_PARTICULAR` starts `CASH` | timestamp differences expected → wider date tolerance |
 | **POS Recon** | File 2 — POS settlement | Cardholder-settlement rows where `TRAN_PARTICULAR` starts `POS` | |
 | **Bulk Recon** | File 3 — Interchange (all card txns) | All cardholder-settlement rows | superset; credit + debit |
+| **Network ↔ ATM Recon** | File 5 — T464 network settlement + File 1 — ATM settlement | No GL | unique reference comparison; mismatch, one-sided, and duplicate outcomes |
 
-*T464 (File 5) is parked — purpose to be decided later.*
+The Network ↔ ATM function is separate from ATM → GL, so a network-side discrepancy does not alter the
+ATM-to-GL match result.
 
 ## GL scope — the six accounts (verified present in the sample)
 

@@ -15,6 +15,7 @@ public class ReconException : IAuditable
     public string? ProcessorAccountNumber { get; set; }
     /// <summary>GL settlement account that was compared to the processor transaction.</summary>
     public string? GlAccountNumber { get; set; }
+    public ReconSettlementLeg? SettlementLeg { get; set; }
     public MatchStatus ExceptionType { get; set; }
     public int? Ccy { get; set; }
     public decimal Confidence { get; set; }

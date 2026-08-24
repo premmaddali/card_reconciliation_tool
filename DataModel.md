@@ -1,10 +1,12 @@
-# ReconTool — Data Model (MasterCard Reconciliation)
+# ReconTool — Data Model (Multi-Scheme Reconciliation Platform)
 
 **EF Core 9, code-first, Fluent API only**, provider **SQL Server**. Mirrors the SBI_IA Tool
 conventions so the two apps are structurally identical. Types are shown as .NET → indicative SQL.
 
 > Contract document, built step by step. Source data = five BankOne sample exports profiled in
 > [FILE_ANALYSIS.md](FILE_ANALYSIS.md). This model is the database contract the Blazor app implements.
+> Section **A2** covers the multi-scheme platform tables added on branch `recon_platform`
+> (see [PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md)).
 
 ## Conventions (standing, unless overridden)
 
@@ -40,6 +42,7 @@ One uploaded file. Type-checked, row-counted, content-hashed for duplicate-uploa
 | RowCount | int | data rows parsed |
 | Status | enum tinyint | `Uploaded`, `Parsed`, `Failed` |
 | ParseError | string(max) null | first fatal parse error, if any |
+| SchemeProfileId | int FK null | owning scheme (platform); null = legacy unscoped Mastercard data |
 | UploadedBy / UploadedDate | Guid / datetime2(3) | audited |
 
 ### ReconRun
@@ -48,15 +51,70 @@ A reconciliation execution for one `PeriodKey`, binding one batch of each requir
 | Column | .NET → SQL | Notes |
 |---|---|---|
 | ReconRunId | int PK | identity |
-| PeriodKey | string(7) | run period |
+| Function | enum tinyint | `AtmToGl`, `PosToGl`, `InterchangeToGl`, `NetworkToAtm` |
+| PeriodKey / PeriodStart / PeriodEnd | string(7) / date null | run period and user-selected range |
 | Status | enum tinyint | `Draft`, `Running`, `Completed`, `Failed` |
-| NetworkT464BatchId | int FK null | → ImportBatch |
-| InterchangeBatchId | int FK null | → ImportBatch |
-| PosBatchId | int FK null | → ImportBatch |
-| AtmBatchId | int FK null | → ImportBatch |
-| GlBatchId | int FK null | → ImportBatch |
+| ProcessorBatchId | int FK | ATM, POS, or Interchange batch, depending on function |
+| GlBatchId | int FK null | GL batch for the three processor → GL functions; null for `NetworkToAtm` |
+| NetworkBatchId | int FK null | T464 batch for `NetworkToAtm`; null otherwise |
+| SchemeProfileId | int FK null | owning scheme (platform); null = legacy unscoped Mastercard data |
 | StartedDate / CompletedDate | datetime2(3) null | |
 | audit cols | | IAuditable |
+
+---
+
+## A2. Platform (multi-scheme, branch `recon_platform`)
+
+### SchemeProfile
+One configured reconciliation scheme: a payment scheme + CMS pairing with its adapters and enabled functions.
+Adding a scheme/CMS = new adapter class + one row here; no engine changes.
+
+| Column | .NET → SQL | Notes |
+|---|---|---|
+| SchemeProfileId | int PK | identity |
+| Name / Scheme / Cms | string(100)/50/50 | e.g. `Mastercard — BankOne`; unique (Scheme, Cms) |
+| TransactionAdapterCode | string(100) | `ITransactionAdapter.Code` for CMS files |
+| GlcAdapterCode | string(100) | `IGlcAdapter.Code` for GL files |
+| Functions | string(200) | `;`-separated enabled functions, e.g. `AtmToGl;PosToGl;InterchangeToGl;NetworkToAtm` |
+| MatchThresholdOverride / DateToleranceDaysOverride | decimal(5,2) / int null | sparse overrides; null = inherit global `MatchWeights` |
+| IsActive | bit | inactive profiles hide their scheme from navigation |
+| audit cols | | IAuditable |
+
+### NormalizedTransaction
+Scheme-agnostic transaction model the engine consumes (populated by projection from legacy staging or
+directly by future adapters). Immutable, no audit columns.
+
+| Column | .NET → SQL | Notes |
+|---|---|---|
+| NormalizedTransactionId | bigint PK | identity |
+| ImportBatchId / SourceRowNumber | int | provenance |
+| SourceTable / SourceStagingId | string(64) / int null | legacy staging row this was projected from |
+| Reference / ExternalReference / AuthorizationCode / TraceNumber / BatchNumber | string | identity fields |
+| TransactionDate / PostingDate / SettlementDate / TransactionDateTime | date ×3 / datetime2 null | |
+| Amount / Currency | decimal(19,4) / int null | signed, normalized |
+| BillingAmount / BillingCurrency / SettlementAmount / SettlementCurrency | decimal(19,4) / int null | |
+| DebitCreditIndicator | string(2) null | D/C as received |
+| Merchant / Terminal / Acquirer / Issuer / MaskedCardNumber / CardType / Scheme / Processor | string | parties & card |
+| Account / Description / TransactionType | string | ledger routing |
+| IsCash / IsPos | bit | channel flags derived by the adapter |
+| SettlementLeg | tinyint | 1 = debit cardholder, 2 = credit intermediary |
+
+Indexes: `(ImportBatchId, Reference)`, `(ImportBatchId, Currency, Amount)`.
+
+### NormalizedGlEntry
+Scheme-agnostic GL entry model from a CBS adapter.
+
+| Column | .NET → SQL | Notes |
+|---|---|---|
+| NormalizedGlEntryId | bigint PK | identity |
+| ImportBatchId / SourceRowNumber / SourceTable / SourceStagingId | | provenance |
+| Account | string(48) | GL account number |
+| PostingDate / PostingDateTime | date / datetime2 null | |
+| Amount / Currency | decimal(19,4) / int | signed; BankOne cardholder accounts post in MUR (480) |
+| Reference / Description / DebitCreditIndicator | string | match key + narrative |
+| IsCash / IsPos / SettlementLeg | bit ×2 / tinyint | channel + leg routed by the adapter |
+
+Indexes: `(ImportBatchId, Reference)`, `(ImportBatchId, Account)`.
 
 ---
 
@@ -186,8 +244,23 @@ Intermediary Settlement · `44006/44001` Interchange Fee Receivable · `91121/91
 
 ## C. Reconciliation results
 
+### AtmNetworkValidation
+One persisted outcome per nonblank T464/ATM reference for a standalone `NetworkToAtm` run. It keeps both
+staging identifiers, reference occurrence counts, amount/currency/fee/date evidence, and a narrative.
+
+| Column | Type | Notes |
+|---|---|---|
+| AtmNetworkValidationId / ReconRunId | int PK / FK | identity and owning network run |
+| NetworkStagingId / AtmStagingId | int null | source row identifiers |
+| ReferenceNumber | char(12) | comparison key |
+| Status | enum tinyint | `Matched`, amount/fee/currency mismatch, missing network/ATM, duplicate |
+| Network* / Atm* | amount, ccy, fee, date | normalized comparison evidence |
+| NetworkReferenceCount / AtmReferenceCount | int | duplicate-review evidence |
+| Narrative | string(512) | analyst-facing outcome description |
+
 ### ReconMatch
-One row per matched pair (or grouped total), per pass. Exact-match on `ReferenceNumber` + amount + fee.
+One processor-to-GL outcome for the three GL-backed functions. The standalone Network ↔ ATM function uses
+`AtmNetworkValidation` instead.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -252,3 +325,7 @@ menu and local+AD login. New `AppPage` rows: Upload, Runs, Exceptions, Dashboard
 ## Changelog
 - **Step 0 (2026-08-14)** — Initial model from five-file profiling: import control, 4 staging tables
   (ATM+POS consolidated), 3-pass result model, exception workflow, identity reuse.
+- **Platform (2026-08-24, branch `recon_platform`)** — Added `SchemeProfile`, `NormalizedTransaction`,
+  `NormalizedGlEntry` (section A2); `SchemeProfileId` ownership columns on `ImportBatch` and `ReconRun`.
+  Migrations: `PlatformNormalizedModel`, `SchemeProfileFunctions`, `SchemeOwnership`. Legacy staging
+  tables unchanged; engine matching math untouched.

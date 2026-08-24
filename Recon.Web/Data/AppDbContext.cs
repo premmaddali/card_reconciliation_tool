@@ -7,6 +7,7 @@ using Recon.Web.Domain.Import;
 using Recon.Web.Domain.Recon;
 using Recon.Web.Domain.Reference;
 using Recon.Web.Domain.Staging;
+using Recon.Web.Platform.Model;
 
 namespace Recon.Web.Data;
 
@@ -28,14 +29,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<StgDebitSettlement> StgDebitSettlements => Set<StgDebitSettlement>();
     public DbSet<StgInterchangeFee> StgInterchangeFees => Set<StgInterchangeFee>();
     public DbSet<StgGlEntry> StgGlEntries => Set<StgGlEntry>();
+    public DbSet<StgGlBulkPosting> StgGlBulkPostings => Set<StgGlBulkPosting>();
 
     // Recon results
     public DbSet<ReconMatch> ReconMatches => Set<ReconMatch>();
     public DbSet<ReconException> ReconExceptions => Set<ReconException>();
     public DbSet<ReconExceptionComment> ReconExceptionComments => Set<ReconExceptionComment>();
     public DbSet<ReconPassSummary> ReconPassSummaries => Set<ReconPassSummary>();
+    public DbSet<AtmNetworkValidation> AtmNetworkValidations => Set<AtmNetworkValidation>();
+    public DbSet<ReconWorkflowDefinition> ReconWorkflowDefinitions => Set<ReconWorkflowDefinition>();
+    public DbSet<ReconWorkflowStep> ReconWorkflowSteps => Set<ReconWorkflowStep>();
+    public DbSet<ReconWorkflowStepRole> ReconWorkflowStepRoles => Set<ReconWorkflowStepRole>();
+    public DbSet<ReconWorkflowActor> ReconWorkflowActors => Set<ReconWorkflowActor>();
+    public DbSet<ReconWorkflowHistory> ReconWorkflowHistories => Set<ReconWorkflowHistory>();
     public DbSet<GlSettlementAccount> GlSettlementAccounts => Set<GlSettlementAccount>();
     public DbSet<IsoCurrency> IsoCurrencies => Set<IsoCurrency>();
+
+    // Platform (generic multi-scheme)
+    public DbSet<SchemeProfile> SchemeProfiles => Set<SchemeProfile>();
+    public DbSet<NormalizedTransaction> NormalizedTransactions => Set<NormalizedTransaction>();
+    public DbSet<NormalizedGlEntry> NormalizedGlEntries => Set<NormalizedGlEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

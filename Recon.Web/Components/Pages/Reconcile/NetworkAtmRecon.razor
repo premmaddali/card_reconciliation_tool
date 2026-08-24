@@ -1,0 +1,221 @@
+@page "/recon/network-atm"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.Import.IImportService ImportService
+@inject Recon.Web.Services.Recon.INetworkAtmReconService NetworkRecon
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Services.Import
+
+<PageTitle>Network ↔ ATM recon · Recon Tool</PageTitle>
+
+<PageHeader Title="Network ↔ ATM reconciliation"
+            Subtitle="Validate the T464 network settlement file against the ATM settlement report"
+            Eyebrow="Reconciliation" Icon="atm" Breadcrumbs="@(new[] { "Reconciliation", "Network ↔ ATM" })" />
+
+<NavigationLock OnBeforeInternalNavigation="PreventNavigationWhileRunning" ConfirmExternalNavigation="@_running" />
+
+<div class="grid gap-6 lg:grid-cols-5">
+    <div class="lg:col-span-2">
+        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <h2 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">New network validation batch</h2>
+
+            <div class="mb-4 grid grid-cols-2 gap-3">
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Period from</label>
+                    <input type="date" @bind="_from" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Period to</label>
+                    <input type="date" @bind="_to" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                </div>
+            </div>
+
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">T464 network settlement file</label>
+            <div class="mb-4 flex min-w-0 items-center gap-3">
+                <InputFile id="network-upload" OnChange="e => { _networkFile = e.File; _confirmNeeded = false; _warning = null; _error = null; }" accept=".xlsx,.csv" disabled="@_running" class="sr-only" />
+                <label for="network-upload" class="inline-flex shrink-0 cursor-pointer items-center rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 @(_running ? "pointer-events-none opacity-50" : "")">Choose file</label>
+                <span class="min-w-0 truncate text-sm @(_networkFile is null ? "text-gray-400" : "text-emerald-600 dark:text-emerald-400")">@(_networkFile?.Name ?? "No file selected")</span>
+            </div>
+
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">ATM settlement file</label>
+            <div class="mb-4 flex min-w-0 items-center gap-3">
+                <InputFile id="atm-upload" OnChange="e => { _atmFile = e.File; _confirmNeeded = false; _warning = null; _error = null; }" accept=".xlsx,.csv" disabled="@_running" class="sr-only" />
+                <label for="atm-upload" class="inline-flex shrink-0 cursor-pointer items-center rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 @(_running ? "pointer-events-none opacity-50" : "")">Choose file</label>
+                <span class="min-w-0 truncate text-sm @(_atmFile is null ? "text-gray-400" : "text-emerald-600 dark:text-emerald-400")">@(_atmFile?.Name ?? "No file selected")</span>
+            </div>
+
+            @if (_warning is not null)
+            {
+                <div class="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-900/30 dark:text-amber-300">
+                    <ExclamationTriangleIcon Class="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>@_warning</span>
+                </div>
+            }
+            @if (_error is not null)
+            {
+                <div class="mb-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-300">
+                    <ExclamationTriangleIcon Class="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>@_error</span>
+                </div>
+            }
+            <button type="button" disabled="@(_running || _networkFile is null || _atmFile is null)"
+                    class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    @onclick="Run">
+                <PlayIcon Class="h-4 w-4" /> <span>@(_confirmNeeded ? "Run anyway" : "Run network validation")</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="lg:col-span-3">
+        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Network validation batches</h2>
+            </div>
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <th class="px-5 py-2.5 font-semibold">Batch</th>
+                        <th class="px-5 py-2.5 font-semibold">Period</th>
+                        <th class="px-5 py-2.5 text-right font-semibold">ATM txns</th>
+                        <th class="px-5 py-2.5 text-right font-semibold">Validated</th>
+                        <th class="px-5 py-2.5 text-right font-semibold">Exceptions</th>
+                        <th class="px-5 py-2.5 text-right font-semibold">Agreement</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                    @if (_runs.Count == 0)
+                    {
+                        <tr><td colspan="6" class="px-5 py-10 text-center text-gray-500 dark:text-gray-400">No batches yet — create one on the left.</td></tr>
+                    }
+                    @foreach (var r in _runs)
+                    {
+                        <tr @key="r.ReconRunId" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40" @onclick="() => Open(r.ReconRunId)">
+                            <td class="px-5 py-3 font-semibold text-primary-700 dark:text-primary-300">#@r.ReconRunId</td>
+                            <td class="px-5 py-3 text-gray-700 dark:text-gray-200">@(r.PeriodStart is { } s && r.PeriodEnd is { } e ? $"{s:dd MMM} – {e:dd MMM yyyy}" : r.PeriodKey)</td>
+                            <td class="px-5 py-3 text-right tabular-nums text-gray-700 dark:text-gray-200">@r.ProcessorCount.ToString("N0")</td>
+                            <td class="px-5 py-3 text-right tabular-nums text-emerald-700 dark:text-emerald-300">@r.MatchedCount.ToString("N0")</td>
+                            <td class="px-5 py-3 text-right tabular-nums text-red-700 dark:text-red-300">@r.ExceptionCount.ToString("N0")</td>
+                            <td class="px-5 py-3 text-right tabular-nums text-gray-700 dark:text-gray-200">@r.AverageConfidence.ToString("0.0")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (_running)
+{
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+        <div class="w-full max-w-lg rounded-2xl border border-primary-200 bg-white p-6 shadow-2xl dark:border-primary-800 dark:bg-gray-900" role="status" aria-live="polite">
+            <div class="flex items-start gap-4">
+                <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-primary-600 text-white shadow-sm"><RefreshIcon Class="h-7 w-7 animate-spin" /></div>
+                <div class="min-w-0 flex-1">
+                    <h2 class="text-lg font-bold text-gray-900 dark:text-white">Validating network settlement</h2>
+                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">@_progress</p>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private DateTime _from = new(2026, 3, 1);
+    private DateTime _to = new(2026, 3, 31);
+    private IBrowserFile? _networkFile, _atmFile;
+    private bool _running, _confirmNeeded;
+    private string? _error, _warning, _progress;
+    private List<ReconRun> _runs = new();
+
+    private const long MaxBytes = 200L * 1024 * 1024;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _runs = await db.ReconRuns
+            .Where(r => r.Function == ReconFunction.NetworkToAtm && r.Status == ReconRunStatus.Completed)
+            .OrderByDescending(r => r.CreatedDate).Take(20).ToListAsync();
+    }
+
+    private async Task Run()
+    {
+        _error = null;
+        if (_networkFile is null || _atmFile is null) return;
+        var from = DateOnly.FromDateTime(_from);
+        var to = DateOnly.FromDateTime(_to);
+        if (to < from) { _error = "Period 'to' must be on or after 'from'."; return; }
+
+        if (!_confirmNeeded)
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dup = await db.ReconRuns.FirstOrDefaultAsync(r =>
+                r.Function == ReconFunction.NetworkToAtm && r.PeriodStart == from && r.PeriodEnd == to && r.Status == ReconRunStatus.Completed);
+            if (dup is not null)
+            {
+                _warning = $"A Network ↔ ATM reconciliation for {from:dd MMM} – {to:dd MMM yyyy} already exists (batch #{dup.ReconRunId}). Running again will create a new batch.";
+                _confirmNeeded = true;
+                return;
+            }
+        }
+
+        _running = true;
+        try
+        {
+            _progress = "Importing T464 network settlement file…";
+            StateHasChanged();
+            var network = await ImportFile(_networkFile);
+            if (!network.Success) { _error = network.Error; return; }
+            if (network.DetectedType != SourceType.NetworkT464)
+            {
+                _error = $"That file was detected as {network.DetectedType}, but this screen expects a {SourceType.NetworkT464} network file.";
+                return;
+            }
+
+            _progress = "Importing ATM settlement file…";
+            StateHasChanged();
+            var atm = await ImportFile(_atmFile);
+            if (!atm.Success) { _error = atm.Error; return; }
+            if (atm.DetectedType != SourceType.AtmSettlement)
+            {
+                _error = $"That file was detected as {atm.DetectedType}, but this screen expects a {SourceType.AtmSettlement} file.";
+                return;
+            }
+
+            _progress = "Comparing network and ATM references…";
+            StateHasChanged();
+            var result = await NetworkRecon.RunAsync(network.ImportBatchId!.Value, atm.ImportBatchId!.Value, from.ToString("yyyy-MM"), from, to);
+            await Load();
+            _networkFile = null;
+            _atmFile = null;
+            _confirmNeeded = false;
+            _warning = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+            _progress = null;
+        }
+    }
+
+    private Task PreventNavigationWhileRunning(LocationChangingContext context)
+    {
+        if (!_running) return Task.CompletedTask;
+        context.PreventNavigation();
+        return Task.CompletedTask;
+    }
+
+    private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}");
+
+    private async Task<ImportOutcome> ImportFile(IBrowserFile file)
+    {
+        await using var stream = file.OpenReadStream(MaxBytes);
+        return await ImportService.ImportAsync(stream, file.Name, _from.ToString("yyyy-MM"));
+    }
+}

@@ -1,0 +1,96 @@
+@page "/admin/workflows"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Identity
+@using Recon.Web.Domain.Recon
+
+<PageTitle>Verification workflows · Recon Tool</PageTitle>
+<PageHeader Title="Verification workflows" Subtitle="Define the maker and each role-based verification step" Eyebrow="Administration" Icon="workflow"
+            Breadcrumbs="@(new[] { "Administration", "Verification workflows" })" />
+
+<div class="grid gap-6 xl:grid-cols-3">
+    <div class="xl:col-span-1 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Active workflows</h2></div>
+        <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            @if (_workflows.Count == 0) { <p class="px-5 py-6 text-sm text-gray-500">No workflow configured.</p> }
+            @foreach (var workflow in _workflows)
+            {
+                <div class="px-5 py-3">
+                    <div class="flex items-center justify-between gap-2"><span class="font-medium text-gray-900 dark:text-white">@workflow.Name</span>@if (workflow.IsDefault) { <span class="rounded-full bg-primary-100 px-2 py-0.5 text-[11px] font-semibold text-primary-700 dark:bg-primary-900/40 dark:text-primary-200">Default</span> }</div>
+                    <p class="mt-1 text-xs text-gray-500">@string.Join(" → ", workflow.Steps.OrderBy(s => s.StepOrder).Select(s => s.Label))</p>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex items-center justify-between gap-3"><div><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Create workflow</h2><p class="mt-1 text-xs text-gray-500 dark:text-gray-400">The first step is the Maker. Every later step is a verification step; tick every role allowed to act at that step.</p></div></div>
+        <div class="mt-5 grid gap-4 sm:grid-cols-[1fr_auto]"><div><label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Workflow name</label><input @bind="_name" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" placeholder="e.g. Monthly recon approval" /></div><label class="flex items-end gap-2 pb-2 text-sm text-gray-700 dark:text-gray-200"><input type="checkbox" @bind="_makeDefault" class="rounded border-gray-300 text-primary-600" /> Make default</label></div>
+
+        <div class="mt-5 space-y-4">
+            @for (var i = 0; i < _steps.Count; i++)
+            {
+                var step = _steps[i];
+                <div @key="step" class="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                    <div class="flex items-center justify-between gap-3"><label class="text-sm font-semibold text-gray-900 dark:text-white">@(i == 0 ? "1. Maker step" : $"{i + 1}. Verification step")</label>@if (i > 1) { <button type="button" @onclick="() => _steps.Remove(step)" class="text-xs font-semibold text-red-600 hover:underline">Remove</button> }</div>
+                    <input @bind="step.Label" class="mt-3 w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" placeholder="Step label" />
+                    <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+                        @foreach (var role in _roles)
+                        {
+                            <label @key="role.AppAccessId" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200"><input type="checkbox" checked="@step.RoleIds.Contains(role.AppAccessId)" @onchange="() => ToggleRole(step, role.AppAccessId)" class="rounded border-gray-300 text-primary-600" /> @role.AccessName</label>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+        <button type="button" @onclick="AddStep" class="mt-4 rounded-lg border border-primary-300 px-3 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-50 dark:border-primary-800 dark:text-primary-200">Add verification step</button>
+        <div class="mt-5 flex items-center gap-3"><button type="button" @onclick="Save" disabled="@_saving" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Save workflow</button>@if (_message is not null) { <span class="text-sm text-emerald-600">@_message</span> }@if (_error is not null) { <span class="text-sm text-red-600">@_error</span> }</div>
+    </div>
+</div>
+
+@code {
+    private sealed class StepDraft { public string Label { get; set; } = ""; public HashSet<int> RoleIds { get; } = []; }
+    private List<AppAccess> _roles = new();
+    private List<ReconWorkflowDefinition> _workflows = new();
+    private List<StepDraft> _steps = [];
+    private string _name = ""; private bool _makeDefault = true; private bool _saving; private string? _message, _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _roles = await db.AppAccesses.Where(r => r.IsActive).OrderBy(r => r.AccessName).ToListAsync();
+        _workflows = await db.ReconWorkflowDefinitions.Include(w => w.Steps).Where(w => w.IsActive).OrderByDescending(w => w.IsDefault).ThenBy(w => w.Name).ToListAsync();
+        var maker = _roles.FirstOrDefault(r => r.AccessName == "Recon Officer")?.AppAccessId;
+        var checker = _roles.FirstOrDefault(r => r.AccessName == "Recon Manager")?.AppAccessId;
+        var makerStep = new StepDraft { Label = "Maker submission" }; if (maker.HasValue) makerStep.RoleIds.Add(maker.Value);
+        var checkerStep = new StepDraft { Label = "Checker verification" }; if (checker.HasValue) checkerStep.RoleIds.Add(checker.Value);
+        _steps = [makerStep, checkerStep];
+    }
+
+    private void ToggleRole(StepDraft step, int roleId) { if (!step.RoleIds.Add(roleId)) step.RoleIds.Remove(roleId); }
+    private void AddStep() => _steps.Add(new StepDraft { Label = "Additional verification" });
+
+    private async Task Save()
+    {
+        _message = _error = null;
+        if (string.IsNullOrWhiteSpace(_name) || _steps.Count < 2 || _steps.Any(s => string.IsNullOrWhiteSpace(s.Label) || s.RoleIds.Count == 0)) { _error = "Enter a name and assign at least one role to the Maker and every verification step."; return; }
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.ReconWorkflowDefinitions.AnyAsync(w => w.Name == _name.Trim())) { _error = "A workflow with that name already exists."; return; }
+            if (_makeDefault) foreach (var old in await db.ReconWorkflowDefinitions.Where(w => w.IsDefault).ToListAsync()) old.IsDefault = false;
+            var workflow = new ReconWorkflowDefinition { Name = _name.Trim(), IsDefault = _makeDefault };
+            for (var i = 0; i < _steps.Count; i++)
+            {
+                var step = new ReconWorkflowStep { StepOrder = i + 1, Label = _steps[i].Label.Trim() };
+                foreach (var roleId in _steps[i].RoleIds) step.Roles.Add(new ReconWorkflowStepRole { AppAccessId = roleId });
+                workflow.Steps.Add(step);
+            }
+            db.ReconWorkflowDefinitions.Add(workflow);
+            await db.SaveChangesAsync();
+            _message = "Workflow saved."; _name = ""; _workflows = await db.ReconWorkflowDefinitions.Include(w => w.Steps).Where(w => w.IsActive).OrderByDescending(w => w.IsDefault).ThenBy(w => w.Name).ToListAsync();
+        }
+        finally { _saving = false; }
+    }
+}

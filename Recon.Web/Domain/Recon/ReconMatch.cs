@@ -14,7 +14,16 @@ public class ReconMatch
 
     public string? ReferenceNumber { get; set; }
     public string? ProcessorAccountNumber { get; set; }
+    /// <summary>Interchange product type, e.g. DC (debit) or CR (credit).</summary>
+    public string? ProcessorProductType { get; set; }
+    /// <summary>Merchant name/acronym supplied by the processor source.</summary>
+    public string? ProcessorMerchant { get; set; }
+    /// <summary>Processor transaction narrative/wording.</summary>
+    public string? ProcessorDescription { get; set; }
     public string? GlAccountNumber { get; set; }
+    /// <summary>GL transaction narrative and any supplementary remarks.</summary>
+    public string? GlDescription { get; set; }
+    public ReconSettlementLeg SettlementLeg { get; set; }
     public MatchStatus MatchStatus { get; set; }
     /// <summary>0–100 weighted score of the chosen candidate.</summary>
     public decimal Confidence { get; set; }
@@ -42,6 +51,8 @@ public class ReconMatch
     /// </summary>
     public decimal? ReconciliationAmount { get; set; }
     public DateOnly? ProcessorDate { get; set; }
+    /// <summary>Original processor transaction timestamp where the source report provides it.</summary>
+    public DateTime? ProcessorTransactionDateTime { get; set; }
 
     // GL side (null when unmatched)
     public int? GlStagingId { get; set; }
@@ -49,6 +60,8 @@ public class ReconMatch
     /// <summary>Actual posting currency of the GL amount (the cardholder settlement GL is posted in MUR).</summary>
     public int? GlCcy { get; set; }
     public DateOnly? GlDate { get; set; }
+    /// <summary>GL entry/verification timestamp where the GL export provides it.</summary>
+    public DateTime? GlPostingDateTime { get; set; }
 
     /// <summary>ISO numeric currency (480 MUR / 840 USD / 978 EUR).</summary>
     public int? Ccy { get; set; }

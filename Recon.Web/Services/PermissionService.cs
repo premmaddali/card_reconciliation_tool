@@ -16,6 +16,9 @@ public interface IPermissionService
     /// <summary>Merged page grants for a user (OR across all their active AppAccess roles), keyed by PageCode.</summary>
     Task<IReadOnlyDictionary<string, PagePermission>> GetGrantsAsync(Guid userId);
 
+    /// <summary>Whether the user has a view grant for a page code.</summary>
+    Task<bool> CanViewAsync(Guid userId, string pageCode);
+
     /// <summary>Menu items the user can view, grouped by parent page, in sequence order.</summary>
     Task<IReadOnlyList<MenuItem>> GetMenuAsync(Guid userId);
 }
@@ -47,6 +50,12 @@ public class PermissionService(IDbContextFactory<AppDbContext> dbFactory) : IPer
                     g.Any(x => x.CanAdd),
                     g.Any(x => x.CanEdit),
                     g.Any(x => x.CanDelete)));
+    }
+
+    public async Task<bool> CanViewAsync(Guid userId, string pageCode)
+    {
+        var grants = await GetGrantsAsync(userId);
+        return grants.TryGetValue(pageCode, out var grant) && grant.CanView;
     }
 
     public async Task<IReadOnlyList<MenuItem>> GetMenuAsync(Guid userId)

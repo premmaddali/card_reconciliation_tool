@@ -7,7 +7,7 @@
 
 <PageTitle>Exceptions · Recon Tool</PageTitle>
 
-<PageHeader Title="Exceptions" Subtitle="Open items across all reconciliation runs"
+<PageHeader Title="Exceptions" Subtitle="Open items across all reconciliation runs" Eyebrow="Reconciliation" Icon="exceptions"
             Breadcrumbs="@(new[] { "Reconciliation", "Exceptions" })" />
 
 <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -72,6 +72,7 @@
     {
         ReconFunction.AtmToGl => "ATM recon",
         ReconFunction.PosToGl => "POS recon",
+        ReconFunction.NetworkToAtm => "Network ↔ ATM recon",
         _ => "Bulk recon"
     };
 }

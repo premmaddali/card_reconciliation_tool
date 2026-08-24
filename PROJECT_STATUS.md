@@ -1,13 +1,18 @@
 # ReconTool — Project Status & Task Register
 
-**BankOne MasterCard Reconciliation Tool** — status as of **2026-08-14**.
+**Multi-Scheme Card Reconciliation Platform** — status as of **2026-08-24** (branch `recon_platform`).
 
 A .NET 9 Blazor Server application that automates the (previously manual, Excel-based) reconciliation
-of MasterCard card settlement against the general ledger. Built to mirror the SBI_IA Tool stack.
+of card settlement against the general ledger. Originally a Mastercard/BankOne tool, now evolving into
+a **generic multi-scheme platform** (Mastercard, Visa, UnionPay, RuPay, domestic schemes) where schemes,
+CMS platforms and core-banking formats are added through adapters and configuration — see
+**[PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md)** and
+**[Generic_Multi_Scheme_Reconciliation_Platform.md](Generic_Multi_Scheme_Reconciliation_Platform.md)**.
 
 > Companion documents: **[FILE_ANALYSIS.md](FILE_ANALYSIS.md)** (source data) · **[DataModel.md](DataModel.md)**
 > (database contract) · **[RECON_ENGINE.md](RECON_ENGINE.md)** (matching logic) ·
-> **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** (phase history).
+> **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** (phase history) ·
+> **[PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md)** (platform refactor).
 
 ---
 
@@ -20,7 +25,7 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
 | CSS build | `npm run build:css` in `Recon.Web` (Tailwind v4) — run after markup changes |
 | Database | SQL Server `localhost`, database **`Recon`** (migrations auto-apply on startup) |
 | Login | **`admin` / `Admin@123`** — ⚠️ change on first use |
-| Tests | `dotnet test` (5 xUnit tests against the real March sample files) |
+| Tests | `dotnet test` (9 xUnit tests against the real March sample files) |
 
 ---
 
@@ -30,7 +35,7 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
 - **Flowbite Blazor + Tailwind CSS v4** (light/dark, indigo primary)
 - **EF Core 9 + SQL Server**, code-first, Fluent API only, `DbContextFactory` pattern, audit interceptor
 - **ASP.NET Identity** (local) **+ Active Directory / LDAP** (hybrid), permission-driven menu
-- **ClosedXML** (Excel import), **QuestPDF** + **HtmlSanitizer** (present; export screens pending)
+- **ClosedXML** (Excel import and export), **HtmlSanitizer**, an authorized CSV match export, and a permission-gated XLSX run summary with exception register
 
 ---
 
@@ -53,10 +58,12 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
   formats incl. T464's `MMDDYY`/`HHMMSS`.
 - Four staging tables (ATM + POS consolidated with a `Channel` discriminator; Interchange; GL; T464).
 - **Content-hash de-dup that reuses** already-staged files (one GL dump serves many batches).
+- Reused uploads are reported as **Already imported** and the import fixture tests tolerate files opened in Excel.
 - Verified: row counts exact (11,533 / 107,544 / 71,641 / 22,987 / 106,282).
 
 ### 3.3 Reconciliation engine ✅
-- **Three independent functions**, each a processor file → GL: **ATM**, **POS**, **Bulk (Interchange)**.
+- **Four independent functions**: **ATM → GL**, **POS → GL**, **Bulk (Interchange) → GL**, and
+  **Network ↔ ATM** (T464 network settlement validated against ATM settlement, with no GL side).
 - Scopes GL to the **six seeded settlement accounts** (cardholder DR + intermediary CR, per MUR/USD/EUR),
   channel via the `POS/`·`CASH/` particular prefix, routed by currency.
 - **Weighted confidence match** — amount + date primary (45 + 33), reference + channel add weight
@@ -69,6 +76,10 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
 ### 3.4 Batch-centric workflow ✅ (current UX)
 - Each recon screen = **"New reconciliation batch"**: pick a **period (from/to)**, upload **TRX** + **GL**
   files inline, **Run**. Validates file types; runs the engine; navigates to results.
+- **Network ↔ ATM recon** (`/recon/network-atm`, its own menu link and batch list) validates a **T464
+  network settlement** file against the **ATM settlement** report: match, amount/fee/currency mismatch,
+  one-sided, and duplicate outcomes per reference. No GL side. On completion, the page refreshes its
+  batch list in place; open the new top row to review the result.
 - **Duplicate-period warning** (function + date range) with non-blocking "Run anyway".
 - **Results view = 3 tabs**: **Transactions** (TRX rows), **GL entries** (relevant rows only, filtered
   to accounts + channel), **Reconciliation** (stat cards + currency summary + exceptions). Paged tables.
@@ -81,6 +92,12 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
   (`ExceptionWorkflowService`, HtmlSanitizer), audited. Verified persisting end-to-end.
 - Global `/exceptions` cross-run overview.
 
+### 3.5.1 ATM network validation ✅
+- Standalone `NetworkToAtm` runs persist one T464-to-ATM validation outcome per nonblank reference, including
+  source-row identifiers, amount/currency/fee/date evidence, and duplicate counts.
+- The batch detail view shows summary counts plus a filterable, paged comparison register. This confirms or
+  challenges the processor-side ATM transaction before analysts investigate its GL outcome.
+
 ### 3.6 Authentication & access ✅ (ported from SBI_IA)
 - **Local + AD/LDAP login** (`/auth/login`, `/auth/logout`, `LdapAuthService`), cookie auth (8h sliding),
   lockout after 5 failures; branded login page; every route protected (`[Authorize]` + `RedirectToLogin`).
@@ -90,10 +107,37 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
   grants, admin user with full access.
 - **Admin screens**: `/admin/users` (create local users, assign roles, enable/disable) and
   `/admin/roles` (per-page permission matrix). Verified in browser.
+- Match CSV downloads require both authentication and the matching ATM/POS/Bulk page-view grant.
+- Each run can download a permission-gated XLSX workbook containing its frozen currency summary and exception register.
 
 ### 3.7 Dashboard ✅
 - Home dashboard: stat tiles (files, rows staged, sources loaded, runs), recent completed runs, quick
   links to each recon function.
+
+### 3.8 Generic multi-scheme platform ✅ (branch `recon_platform`)
+- **Adapter architecture** (`Recon.Web/Platform/`): `ITransactionAdapter` / `IGlcAdapter` parse scheme- and
+  CMS-specific files; `AdapterRegistry` resolves them; `NormalizedTransaction` / `NormalizedGlEntry` are the
+  scheme-agnostic models the engine consumes. Mastercard/BankOne parsers were extracted verbatim into
+  adapters (`BankOne*Adapter`); a `VisaDemoTransactionAdapter` proves extensibility with zero engine changes.
+- **SchemeProfile configuration table**: one row per scheme+CMS pairing (adapter codes, enabled functions,
+  match-rule overrides, active flag). Seeded: Mastercard—BankOne (active, real adapters) plus Visa,
+  UnionPay, RuPay, Domestic placeholders (active, demo data).
+- **Normalized projection**: legacy staging rows are projected into the normalized model
+  (`NormalizedProjection`), preserving all BankOne semantics (channel prefixes, MUR posting convention,
+  FX fallback chain, settlement-leg routing) outside the engine. The engine reads normalized tables when a
+  batch is projected and falls back to legacy loaders otherwise — matching math untouched.
+- **Scheme ownership**: `ImportBatch.SchemeProfileId` and `ReconRun.SchemeProfileId` isolate every batch
+  and run per scheme; screens filter strictly to their scheme (legacy screens see unscoped Mastercard data).
+- **Demo data** (`DemoDataSeeder`): each placeholder scheme gets its own GL dump + three settlement batches
+  and three completed runs (ATM/POS/Bulk) with realistic counts and confidence — full-featured screens,
+  not stubs. Hashes namespaced `demo-<scheme>-…` so they never collide with real uploads.
+- **Navigation**: scheme landing page (`/recon`) with one card per scheme linking directly to each
+  function's actual screen; sidebar has collapsible per-scheme groups (arrow toggle, auto-expand on active
+  child) between Reconciliation and Administration. Mastercard's menu items route to the original screens
+  (`/recon/atm|pos|bulk|network-atm`); other schemes use `/recon/scheme/{id}/{function}` pages that render
+  the same `ReconRunner`. Old flat recon menu items retired.
+- **Migrations**: `PlatformNormalizedModel` (SchemeProfiles, NormalizedTransactions, NormalizedGlEntries),
+  `SchemeProfileFunctions` (Functions column), `SchemeOwnership` (scheme FKs on batches/runs).
 
 ---
 
@@ -102,10 +146,11 @@ of MasterCard card settlement against the general ledger. Built to mirror the SB
 | Area | Tables |
 |---|---|
 | Identity / access | `AspNetUsers/Roles/…`, `AppPage`, `AppAccess`, `AppAccessMenu`, `UserAppAccess` |
-| Import control | `ImportBatch`, `ReconRun` (function, period range, batch refs, headline results) |
+| Import control | `ImportBatch` (+ `SchemeProfileId`), `ReconRun` (+ `SchemeProfileId`; function, period range, processor/GL/network batch refs, headline results) |
 | Staging (raw) | `StgDebitSettlement` (ATM+POS), `StgInterchangeFee`, `StgGlEntry`, `StgNetworkT464` |
-| Recon results | `ReconMatch`, `ReconException`, `ReconExceptionComment`, `ReconPassSummary` |
-| Reference | `GlSettlementAccount` (the 6 seeded accounts) |
+| Platform (normalized) | `SchemeProfile`, `NormalizedTransaction`, `NormalizedGlEntry` |
+| Recon results | `ReconMatch`, `ReconException`, `ReconExceptionComment`, `ReconPassSummary`, `AtmNetworkValidation` |
+| Reference | `GlSettlementAccount` (the 6 seeded accounts), `IsoCurrency` |
 
 Full column-level contract in **[DataModel.md](DataModel.md)**.
 
@@ -124,29 +169,33 @@ Full column-level contract in **[DataModel.md](DataModel.md)**.
 
 ## 6. Verification
 
-- **5 xUnit tests pass** (`Recon.Web.Tests`): T464 parse + normalization, ATM channel/NULL/sign,
-  duplicate handling, and a full POS + ATM engine run against the real sample.
+- Import pipeline tests pass for T464 parsing, ATM channel/NULL/sign, and duplicate batch reuse; focused
+  tests cover maker/checker workflow transitions plus T464-to-ATM outcome classification and standalone
+  batch creation. Full engine runs continue to use the real March sample files. All 9 tests green after
+  the platform refactor (engine matching math untouched; legacy loaders retained as fallback).
 - Browser-verified: login/logout + protected redirect, user creation, permission menu, batch results
-  3-tab view, exception status + comment persistence.
-- Dev DB seeded with runs #5 (ATM), #6 (POS), #7 (Bulk) via the `SeedDevDatabase` utility test.
+  3-tab view, exception status + comment persistence, scheme landing page cards, collapsible per-scheme
+  sidebar groups, per-scheme demo runs (Visa/UnionPay/RuPay/Domestic).
+- Dev DB seeded with runs #5 (ATM), #6 (POS), #7 (Bulk) via the `SeedDevDatabase` utility test, plus
+  per-scheme demo runs from `DemoDataSeeder`.
 
 ---
 
 ## 7. Pending tasks
 
 ### High priority
-1. **Excel / PDF export** — export exceptions and the run summary (QuestPDF + ClosedXML are already
-   referenced). Analysts will expect a downloadable exception report.
-2. **Change default admin password** flow — force/allow password change; currently `admin/Admin@123` is
+1. **Default admin password** flow — force/allow password change; currently `admin/Admin@123` is
    seeded and must be changed manually.
 
 ### Medium priority
 4. **Intermediary-account reconciliation** — v1 matches against cardholder-settlement rows only; the
    intermediary settlement accounts (the MasterCard clearing leg) are not yet reconciled.
-5. **"Make it generic"** — extract the MasterCard specifics (accounts, channel prefixes, weights, source
-   layouts) into a configurable "scheme profile" so other reconciliations can be added.
-6. **T464 network file** — role still undecided (parked by request); decide whether/how it reconciles
-   (e.g., network ↔ ATM acquiring).
+5. ~~"Make it generic"~~ ✅ **Done** (branch `recon_platform`) — scheme/CMS/CBS specifics now live in
+   adapters + `SchemeProfile` configuration; see §3.8 and PLATFORM_ARCHITECTURE.md. Remaining follow-ups:
+   route `ImportService` detection through `IAdapterRegistry`, add a SchemeProfile admin screen, and
+   replace placeholder adapters with real ones when onboarding Visa/UnionPay/RuPay/domestic schemes.
+6. **T464 network file** — initial network ↔ ATM acquiring validation is implemented; confirm analyst
+  thresholds and whether it should become a blocking control before verification.
 7. **Large-table performance** — data tabs page at 100 rows; consider virtualization/server search for
    exploring 70k–100k row batches. Exceptions grid caps at 500 rows.
 
@@ -169,3 +218,8 @@ Full column-level contract in **[DataModel.md](DataModel.md)**.
 - Sample files live in `SharedFiles/` (git-ignored) and were renamed to `0-GL`, `1-ATM`, `2. POS`,
   `3-INTERCHANGE`, `5-T464`.
 - Writes via raw `sqlcmd` need `SET QUOTED_IDENTIFIER ON` (filtered indexes); the app itself is unaffected.
+- Placeholder schemes (Visa/UnionPay/RuPay/Domestic) run on demo data seeded by `DemoDataSeeder`; their
+  upload slots accept only BankOne-format files until real adapters are registered. Clear a scheme's demo
+  rows (batches + runs with its `SchemeProfileId`) before first production use.
+- `ImportService` still performs its own header detection (not yet routed through `IAdapterRegistry`);
+  new-scheme files are rejected until that follow-up is done.

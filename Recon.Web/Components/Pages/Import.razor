@@ -4,7 +4,7 @@
 
 <PageTitle>Import files · Recon Tool</PageTitle>
 
-<PageHeader Title="Import files" Subtitle="Upload a BankOne export — the source type is detected automatically"
+<PageHeader Title="Import files" Subtitle="Upload a BankOne export — the source type is detected automatically" Eyebrow="Reconciliation" Icon="import"
             Breadcrumbs="@(new[] { "Reconciliation", "Import" })" />
 
 <div class="max-w-2xl">
@@ -38,13 +38,13 @@
                             <span class="ml-2 text-gray-400">→ @r.Outcome.DetectedType</span>
                         }
                     </div>
-                    @if (r.Outcome.Success)
-                    {
-                        <StatusBadge Text="@($"{r.Outcome.RowCount:N0} rows")" Color="green" />
-                    }
-                    else if (r.Outcome.Duplicate)
+                    @if (r.Outcome.Duplicate)
                     {
                         <StatusBadge Text="Already imported" Color="amber" />
+                    }
+                    else if (r.Outcome.Success)
+                    {
+                        <StatusBadge Text="@($"{r.Outcome.RowCount:N0} rows")" Color="green" />
                     }
                     else
                     {

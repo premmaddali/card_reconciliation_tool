@@ -16,8 +16,9 @@ public record ImportOutcome(bool Success, SourceType? DetectedType, int RowCount
 
 public interface IImportService
 {
-    /// <summary>Detects the source type from the header, then parses and persists the file.</summary>
-    Task<ImportOutcome> ImportAsync(Stream fileStream, string fileName, string periodKey, CancellationToken ct = default);
+    /// <summary>Detects the source type from the header, then parses and persists the file.
+    /// <paramref name="schemeProfileId"/> tags the batch with the owning scheme (null = legacy).</summary>
+    Task<ImportOutcome> ImportAsync(Stream fileStream, string fileName, string periodKey, int? schemeProfileId = null, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -26,7 +27,7 @@ public interface IImportService
 /// </summary>
 public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportService
 {
-    public async Task<ImportOutcome> ImportAsync(Stream fileStream, string fileName, string periodKey, CancellationToken ct = default)
+    public async Task<ImportOutcome> ImportAsync(Stream fileStream, string fileName, string periodKey, int? schemeProfileId = null, CancellationToken ct = default)
     {
         // Buffer to a seekable stream so we can hash and then read.
         using var ms = new MemoryStream();
@@ -36,7 +37,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         ms.Position = 0;
 
         if (Path.GetExtension(fileName).Equals(".csv", StringComparison.OrdinalIgnoreCase))
-            return await ImportCsvAsync(ms, fileName, periodKey, hash, ct);
+            return await ImportCsvAsync(ms, fileName, periodKey, hash, schemeProfileId, ct);
 
         XLWorkbook wb;
         try { wb = new XLWorkbook(ms); }
@@ -62,7 +63,8 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 FileName = fileName,
                 ContentHash = hash,
                 PeriodKey = periodKey,
-                Status = ImportStatus.Uploaded
+                Status = ImportStatus.Uploaded,
+                SchemeProfileId = schemeProfileId
             };
             db.ImportBatches.Add(batch);
             await db.SaveChangesAsync(ct);
@@ -101,9 +103,15 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         SourceType.NetworkT464 => BulkInsertAsync(db, db.ChangeTracker.Entries<StgNetworkT464>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgNetworkT464", nameof(StgNetworkT464.StgNetworkT464Id), ct),
         SourceType.InterchangeFee => BulkInsertAsync(db, db.ChangeTracker.Entries<StgInterchangeFee>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgInterchangeFees", nameof(StgInterchangeFee.StgInterchangeFeeId), ct),
         SourceType.PosSettlement or SourceType.AtmSettlement => BulkInsertAsync(db, db.ChangeTracker.Entries<StgDebitSettlement>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgDebitSettlements", nameof(StgDebitSettlement.StgDebitSettlementId), ct),
-        SourceType.GlDump => BulkInsertAsync(db, db.ChangeTracker.Entries<StgGlEntry>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgGlEntries", nameof(StgGlEntry.StgGlEntryId), ct),
+        SourceType.GlDump => BulkInsertGlAsync(db, ct),
         _ => Task.CompletedTask
     };
+
+    private static async Task BulkInsertGlAsync(AppDbContext db, CancellationToken ct)
+    {
+        await BulkInsertAsync(db, db.ChangeTracker.Entries<StgGlEntry>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgGlEntries", nameof(StgGlEntry.StgGlEntryId), ct);
+        await BulkInsertAsync(db, db.ChangeTracker.Entries<StgGlBulkPosting>().Where(e => e.State == EntityState.Added).Select(e => e.Entity), "StgGlBulkPostings", nameof(StgGlBulkPosting.StgGlBulkPostingId), ct);
+    }
 
     private static async Task BulkInsertAsync<T>(AppDbContext db, IEnumerable<T> entities, string tableName, string keyName, CancellationToken ct)
     {
@@ -200,7 +208,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
             ? SourceType.AtmSettlement : SourceType.PosSettlement;
     }
 
-    private async Task<ImportOutcome> ImportCsvAsync(Stream stream, string fileName, string periodKey, string hash, CancellationToken ct)
+    private async Task<ImportOutcome> ImportCsvAsync(Stream stream, string fileName, string periodKey, string hash, int? schemeProfileId, CancellationToken ct)
     {
         stream.Position = 0;
         var rows = new List<CsvImportRow>();
@@ -239,7 +247,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         if (existing is not null)
             return new ImportOutcome(true, type, existing.RowCount, null, Duplicate: true, ImportBatchId: existing.ImportBatchId);
 
-        var batch = new ImportBatch { SourceType = type.Value, FileName = fileName, ContentHash = hash, PeriodKey = periodKey, Status = ImportStatus.Uploaded };
+        var batch = new ImportBatch { SourceType = type.Value, FileName = fileName, ContentHash = hash, PeriodKey = periodKey, Status = ImportStatus.Uploaded, SchemeProfileId = schemeProfileId };
         db.ImportBatches.Add(batch);
         await db.SaveChangesAsync(ct);
         try
@@ -335,6 +343,10 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         return row.GetCell(col);
     }
 
+    /// <summary>Ignore trailing/empty worksheet rows so they cannot become zero-value reconciliation exceptions.</summary>
+    private static bool IsBlankRow(IImportRow row, Dictionary<string, int> headers) => !headers.Values.Distinct()
+        .Any(column => row.GetCell(column) is { } value && !string.IsNullOrWhiteSpace(value.ToString()));
+
     // ---- per-source parsers --------------------------------------------------
     private static int Parse(SourceType type, Dictionary<string, int> headers, IEnumerable<IImportRow> rows, int batchId, AppDbContext db) => type switch
     {
@@ -351,6 +363,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         var n = 0;
         foreach (var row in rows)
         {
+            if (IsBlankRow(row, h)) continue;
             var txnCcy = ValueParsers.Int(Cell(row, h, "Currency Code Transaction"));
             var setCcy = ValueParsers.Int(Cell(row, h, "Currency Code Settlement"));
             db.StgNetworkT464.Add(new StgNetworkT464
@@ -394,6 +407,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         var n = 0;
         foreach (var row in rows)
         {
+            if (IsBlankRow(row, h)) continue;
             var txnCcy = ValueParsers.Int(Cell(row, h, "TRANSACTION_CURRENCY"));
             var feeCcy = ValueParsers.Int(Cell(row, h, "INTERCHANGE_FEES_CURRENCY"));
             db.StgDebitSettlements.Add(new StgDebitSettlement
@@ -437,6 +451,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         var n = 0;
         foreach (var row in rows)
         {
+            if (IsBlankRow(row, h)) continue;
             db.StgInterchangeFees.Add(new StgInterchangeFee
             {
                 ImportBatchId = batchId,
@@ -478,7 +493,8 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         var n = 0;
         foreach (var row in rows)
         {
-            db.StgGlEntries.Add(new StgGlEntry
+            if (IsBlankRow(row, h)) continue;
+            var entry = new StgGlEntry
             {
                 ImportBatchId = batchId,
                 SourceRowNumber = row.SourceRowNumber,
@@ -505,9 +521,52 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 Rate = ValueParsers.Amount(Cell(row, h, "RATE")),
                 PartTranSrlNum = ValueParsers.Int(Cell(row, h, "PART_TRAN_SRL_NUM")),
                 MurAmt = ValueParsers.Amount(Cell(row, h, "MUR_AMT")),
-            });
+            };
+
+            if (IsGlBulkPosting(entry.TranParticular, entry.TranParticular2, entry.TranRmks))
+                db.StgGlBulkPostings.Add(ToBulkPosting(entry));
+            else
+                db.StgGlEntries.Add(entry);
             n++;
         }
         return n;
     }
+
+    private static bool IsGlBulkPosting(string? tranParticular, string? tranParticular2, string? tranRmks)
+    {
+        var text = string.Join(' ', tranParticular, tranParticular2, tranRmks).ToUpperInvariant();
+        return text.Contains("DEBIT CARD SETTLEMENT", StringComparison.Ordinal)
+            || text.Contains("MC SETTLEMENT", StringComparison.Ordinal)
+            || text.Contains("CARD SETTLEMENT", StringComparison.Ordinal)
+            || text.Contains("SETTLEMENT DD", StringComparison.Ordinal);
+    }
+
+    private static StgGlBulkPosting ToBulkPosting(StgGlEntry entry) => new()
+    {
+        ImportBatchId = entry.ImportBatchId,
+        SourceRowNumber = entry.SourceRowNumber,
+        SolId = entry.SolId,
+        AcctNum = entry.AcctNum,
+        GlSubHeadCode = entry.GlSubHeadCode,
+        GlAccount = entry.GlAccount,
+        AcctName = entry.AcctName,
+        TranDate = entry.TranDate,
+        TranId = entry.TranId,
+        RefNum = entry.RefNum,
+        TranParticular = entry.TranParticular,
+        TranParticular2 = entry.TranParticular2,
+        TranParticularCode = entry.TranParticularCode,
+        Debit = entry.Debit,
+        Credit = entry.Credit,
+        TranRmks = entry.TranRmks,
+        TranAmt = entry.TranAmt,
+        TranCcyCode = entry.TranCcyCode,
+        EntryUserId = entry.EntryUserId,
+        VfdUserId = entry.VfdUserId,
+        EntryDate = entry.EntryDate,
+        VfdDate = entry.VfdDate,
+        Rate = entry.Rate,
+        PartTranSrlNum = entry.PartTranSrlNum,
+        MurAmt = entry.MurAmt,
+    };
 }

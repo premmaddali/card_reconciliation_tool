@@ -2,12 +2,13 @@ using Recon.Web.Domain.Common;
 
 namespace Recon.Web.Domain.Import;
 
-/// <summary>The three independent MasterCard reconciliation functions (each a processor file → GL).</summary>
+/// <summary>The independent MasterCard reconciliation functions (each a processor file → GL, or T464 network → ATM).</summary>
 public enum ReconFunction : byte
 {
     AtmToGl = 1,
     PosToGl = 2,
-    InterchangeToGl = 3
+    InterchangeToGl = 3,
+    NetworkToAtm = 4
 }
 
 public enum ReconRunStatus : byte
@@ -16,6 +17,14 @@ public enum ReconRunStatus : byte
     Running = 1,
     Completed = 2,
     Failed = 3
+}
+
+/// <summary>Business approval state, independent from the technical reconciliation run state.</summary>
+public enum ReconVerificationStatus : byte
+{
+    NotSubmitted = 0,
+    AwaitingVerification = 1,
+    Verified = 2
 }
 
 /// <summary>
@@ -35,8 +44,14 @@ public class ReconRun : IAuditable
     /// <summary>The processor-side batch (ATM, POS or Interchange, per <see cref="Function"/>).</summary>
     public int ProcessorBatchId { get; set; }
     public ImportBatch? ProcessorBatch { get; set; }
-    public int GlBatchId { get; set; }
+    /// <summary>The GL batch; null for Network ↔ ATM runs, which have no GL side.</summary>
+    public int? GlBatchId { get; set; }
     public ImportBatch? GlBatch { get; set; }
+    /// <summary>The T464 network batch for Network ↔ ATM runs; null otherwise.</summary>
+    public int? NetworkBatchId { get; set; }
+    public ImportBatch? NetworkBatch { get; set; }
+    /// <summary>Scheme this run belongs to (null = legacy/unassigned Mastercard data).</summary>
+    public int? SchemeProfileId { get; set; }
 
     public DateTime? StartedDate { get; set; }
     public DateTime? CompletedDate { get; set; }
@@ -46,6 +61,14 @@ public class ReconRun : IAuditable
     public int MatchedCount { get; set; }
     public int ExceptionCount { get; set; }
     public decimal AverageConfidence { get; set; }
+
+    // Configurable maker/checker workflow state.  The responsible actor is a readable snapshot
+    // because a step may be assigned to more than one business role.
+    public int? WorkflowDefinitionId { get; set; }
+    public int? CurrentWorkflowStepId { get; set; }
+    public ReconVerificationStatus VerificationStatus { get; set; } = ReconVerificationStatus.NotSubmitted;
+    public string? NextAction { get; set; }
+    public string? ResponsibleActor { get; set; }
 
     public Guid CreatedBy { get; set; }
     public DateTime CreatedDate { get; set; }

@@ -34,6 +34,8 @@ public class ImportBatch : IAuditable
     public int RowCount { get; set; }
     public ImportStatus Status { get; set; } = ImportStatus.Uploaded;
     public string? ParseError { get; set; }
+    /// <summary>Scheme this file belongs to (null = legacy/unassigned Mastercard data).</summary>
+    public int? SchemeProfileId { get; set; }
 
     public Guid CreatedBy { get; set; }
     public DateTime CreatedDate { get; set; }

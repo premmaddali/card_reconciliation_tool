@@ -1,18 +1,27 @@
 @page "/"
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
 @using Microsoft.EntityFrameworkCore
 @using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
 
 <PageTitle>Dashboard · Recon Tool</PageTitle>
 
-<PageHeader Title="Dashboard" Subtitle="MasterCard reconciliation — BankOne" />
+<PageHeader Title="Dashboard" Subtitle="Card reconciliation platform" Eyebrow="Overview" Icon="dashboard" />
 
+<div class="mb-5 flex gap-1 border-b border-gray-200 dark:border-gray-700">
+    <button type="button" @onclick='() => _dashboardTab = "overview"' class='@DashboardTabClass("overview")'>Overview</button>
+    <button type="button" @onclick='() => _dashboardTab = "awaiting"' class='@DashboardTabClass("awaiting")'>Awaiting verification <span class="ml-1 rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] text-primary-700 dark:bg-primary-900/40 dark:text-primary-200">@_awaiting.Count</span></button>
+</div>
+
+@if (_dashboardTab == "overview")
+{
 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
     <StatCard Label="Files imported" Value="@_batchCount.ToString()" Hint="staging batches" Accent="blue">
         <Icon><FileImportIcon Class="h-5 w-5" /></Icon>
     </StatCard>
-    <StatCard Label="Rows staged" Value="@_rowCount.ToString("N0")" Hint="across all sources" Accent="violet">
+    <StatCard Label="Rows staged" Value="@_rowCount.ToString("N0")" Hint="across all sources" Accent="green">
         <Icon><ListIcon Class="h-5 w-5" /></Icon>
     </StatCard>
     <StatCard Label="Sources loaded" Value="@($"{_sourcesLoaded}/5")" Hint="required file types" Accent="green">
@@ -22,7 +31,17 @@
         <Icon><RefreshIcon Class="h-5 w-5" /></Icon>
     </StatCard>
 </div>
+}
+else
+{
+    <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Awaiting my verification</h2></div>
+        <table class="w-full text-left text-sm"><thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400"><tr class="border-b border-gray-100 dark:border-gray-700"><th class="px-5 py-2.5">Batch</th><th class="px-5 py-2.5">Function</th><th class="px-5 py-2.5">Period</th><th class="px-5 py-2.5">Next action</th><th class="px-5 py-2.5">Responsible role(s)</th><th class="px-5 py-2.5"></th></tr></thead><tbody class="divide-y divide-gray-100 dark:divide-gray-700">@if (_awaiting.Count == 0) { <tr><td colspan="6" class="px-5 py-10 text-center text-gray-500">No batches are awaiting your verification.</td></tr> } @foreach (var item in _awaiting) { <tr @key="item.RunId"><td class="px-5 py-3 font-semibold text-primary-700">#@item.RunId</td><td class="px-5 py-3">@FunctionName(item.Function)</td><td class="px-5 py-3">@item.Period</td><td class="px-5 py-3">@item.NextAction</td><td class="px-5 py-3">@item.Responsible</td><td class="px-5 py-3 text-right"><button type="button" @onclick="() => Open(item.RunId)" class="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white">Review</button></td></tr> }</tbody></table>
+    </div>
+}
 
+@if (_dashboardTab == "overview")
+{
 <div class="mt-6 grid gap-6 lg:grid-cols-3">
     <div class="lg:col-span-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700">
@@ -63,15 +82,20 @@
             <a href="/recon/atm" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><RocketIcon Class="h-5 w-5 text-primary-600" /> ATM recon</a>
             <a href="/recon/pos" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><TableRowIcon Class="h-5 w-5 text-primary-600" /> POS recon</a>
             <a href="/recon/bulk" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><ChartIcon Class="h-5 w-5 text-primary-600" /> Bulk recon</a>
+            <a href="/recon/network-atm" class="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 hover:border-primary-300 hover:bg-primary-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-primary-900/20"><RocketIcon Class="h-5 w-5 text-primary-600" /> Network ↔ ATM recon</a>
         </div>
         <p class="mt-4 text-xs text-gray-500 dark:text-gray-400">Import the GL dump and a processor file first on the <a href="/import" class="text-primary-600 hover:underline">Import</a> page.</p>
     </div>
 </div>
+}
 
 @code {
     private int _batchCount, _runCount, _sourcesLoaded;
     private long _rowCount;
     private List<ReconRun> _runs = new();
+    private sealed record AwaitingItem(int RunId, ReconFunction Function, string Period, string? NextAction, string? Responsible);
+    private List<AwaitingItem> _awaiting = new();
+    private string _dashboardTab = "overview";
 
     protected override async Task OnInitializedAsync()
     {
@@ -83,14 +107,37 @@
         _runCount = await db.ReconRuns.CountAsync();
         _runs = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed)
             .OrderByDescending(r => r.CreatedDate).Take(8).ToListAsync();
+
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var claim = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (Guid.TryParse(claim, out var userId))
+        {
+            var roleIds = await db.UserAppAccesses.Where(x => x.UserId == userId && x.IsActive).Select(x => x.AppAccessId).ToListAsync();
+            // Use EXISTS rather than join + Distinct: SQL Server can translate this reliably and
+            // each reconciliation run is returned once even where several of the user's roles
+            // are permitted to complete the same verification step.
+            _awaiting = await db.ReconRuns
+                .Where(run => run.VerificationStatus == ReconVerificationStatus.AwaitingVerification
+                    && db.ReconWorkflowActors.Any(actor =>
+                        actor.ReconRunId == run.ReconRunId
+                        && actor.Status == ReconWorkflowActorStatus.AwaitingAction
+                        && roleIds.Contains(actor.AppAccessId)))
+                .OrderBy(run => run.PeriodKey)
+                .ThenBy(run => run.ReconRunId)
+                .Select(run => new AwaitingItem(run.ReconRunId, run.Function, run.PeriodKey, run.NextAction, run.ResponsibleActor))
+                .ToListAsync();
+        }
     }
 
     private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}");
+
+    private string DashboardTabClass(string tab) => "border-b-2 px-4 py-2 text-sm font-semibold " + (_dashboardTab == tab ? "border-primary-600 text-primary-700 dark:text-primary-200" : "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400");
 
     private static string FunctionName(ReconFunction f) => f switch
     {
         ReconFunction.AtmToGl => "ATM recon",
         ReconFunction.PosToGl => "POS recon",
+        ReconFunction.NetworkToAtm => "Network ↔ ATM recon",
         _ => "Bulk recon"
     };
 }

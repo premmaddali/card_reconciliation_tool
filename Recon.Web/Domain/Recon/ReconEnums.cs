@@ -21,6 +21,13 @@ public enum StagingSource : byte
     GlEntry = 5
 }
 
+/// <summary>The two bank-account legs expected for every card-to-bank reconciliation.</summary>
+public enum ReconSettlementLeg : byte
+{
+    DebitCardholder = 1,
+    CreditIntermediary = 2
+}
+
 public enum ExceptionStatus : byte
 {
     Open = 0,

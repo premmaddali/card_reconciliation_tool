@@ -1,0 +1,105 @@
+@page "/recon"
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Platform.Model
+@attribute [Authorize]
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.IPermissionService Permissions
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+
+<PageTitle>Reconciliation · Recon Tool</PageTitle>
+
+<PageHeader Title="Reconciliation" Subtitle="Choose a payment scheme to run or review reconciliations" Eyebrow="Overview" Icon="bulk" />
+
+<div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+    @foreach (var scheme in _schemes)
+    {
+        <div class="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm transition-all hover:border-primary-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:border-primary-700">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-50 text-lg font-bold text-primary-700 shadow-inner dark:bg-primary-900/40 dark:text-primary-200">
+                @scheme.Logo
+            </div>
+            <div>
+                <p class="text-base font-bold text-gray-900 dark:text-white">@scheme.Scheme</p>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">@scheme.Cms</p>
+            </div>
+            @* Direct links to each function's actual recon screen. *@
+            <div class="mt-auto flex flex-col gap-1.5">
+                @foreach (var fn in scheme.Items)
+                {
+                    <a href="@fn.Route" class="group inline-flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700 dark:border-gray-700 dark:bg-gray-700/40 dark:text-gray-200 dark:hover:border-primary-800 dark:hover:bg-primary-900/30 dark:hover:text-primary-200">
+                        @fn.Label
+                        <ArrowRightIcon Class="h-4 w-4 text-gray-400 transition-colors group-hover:text-primary-600 dark:group-hover:text-primary-300" />
+                    </a>
+                }
+            </div>
+        </div>
+    }
+    @if (_schemes.Count == 0)
+    {
+        <div class="col-span-full rounded-xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400">
+            No active schemes configured. Enable a scheme profile in configuration.
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record FunctionLink(string Label, string Route);
+    private sealed record SchemeCard(int SchemeProfileId, string Scheme, string Cms, string Logo, List<FunctionLink> Items);
+
+    private List<SchemeCard> _schemes = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var userId = Guid.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+        var grants = await Permissions.GetGrantsAsync(userId);
+        bool CanView(string code) => grants.TryGetValue(code, out var g) && g.CanView;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var profiles = await db.SchemeProfiles.Where(p => p.IsActive).OrderBy(p => p.Scheme).ToListAsync();
+
+        // A scheme card is visible when the user can view at least one of its enabled functions.
+        _schemes = profiles
+            .Select(p => new SchemeCard(p.SchemeProfileId, p.Scheme, p.Cms, LogoFor(p.Scheme), FunctionLinks(p)))
+            .Where(c => c.Items.Any())
+            .ToList();
+    }
+
+    /// <summary>One link per enabled function, pointing at the scheme's actual recon screen
+    /// (Mastercard uses the original pages; other schemes the generic per-scheme page).</summary>
+    private List<FunctionLink> FunctionLinks(SchemeProfile p)
+    {
+        var links = new List<FunctionLink>();
+        foreach (var fn in p.Functions.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var route = fn switch
+            {
+                "AtmToGl" when p.Scheme == "Mastercard" => "/recon/atm",
+                "PosToGl" when p.Scheme == "Mastercard" => "/recon/pos",
+                "InterchangeToGl" when p.Scheme == "Mastercard" => "/recon/bulk",
+                "NetworkToAtm" when p.Scheme == "Mastercard" => "/recon/network-atm",
+                _ => $"/recon/scheme/{p.SchemeProfileId}/{fn}"
+            };
+            links.Add(new FunctionLink(LabelFor(fn), route));
+        }
+        return links;
+    }
+
+    internal static string LabelFor(string function) => function switch
+    {
+        "AtmToGl" => "ATM recon",
+        "PosToGl" => "POS recon",
+        "InterchangeToGl" => "Bulk recon",
+        "NetworkToAtm" => "Network ↔ ATM recon",
+        _ => function
+    };
+
+    private static string LogoFor(string scheme) => scheme switch
+    {
+        "Mastercard" => "MC",
+        "Visa" => "V",
+        "UnionPay" => "UP",
+        "RuPay" => "RP",
+        _ => scheme.Length <= 2 ? scheme.ToUpperInvariant() : scheme[..2].ToUpperInvariant()
+    };
+}

@@ -41,6 +41,7 @@ public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
             o.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         services.AddScoped<IImportService, ImportService>();
+        services.AddScoped<IAtmNetworkValidationService, AtmNetworkValidationService>();
         services.AddScoped<IReconEngine, ReconEngine>();
         services.AddSingleton<IOptions<MatchWeights>>(Options.Create(new MatchWeights()));
         _sp = services.BuildServiceProvider();
