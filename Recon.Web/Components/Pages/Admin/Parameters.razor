@@ -1,0 +1,96 @@
+@page "/admin/parameters"
+@attribute [Authorize]
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Recon
+@using Recon.Web.Platform.Adapters
+@using Recon.Web.Platform.Model
+@inject IAdapterRegistry Adapters
+
+<PageTitle>Run parameters · Recon Tool</PageTitle>
+<PageHeader Title="Run parameters" Subtitle="Set administrator-controlled values that users may apply to a reconciliation run" Eyebrow="Administration" Icon="workflow"
+            Breadcrumbs="@(new[] { "Administration", "Run parameters" })" />
+
+<div class="max-w-2xl rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Amount tolerance</h2>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">When a user selects “Apply amount tolerance” for a new batch, an otherwise matching record is accepted when its absolute difference is at or below this amount.</p>
+    <div class="mt-5 max-w-xs">
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Maximum difference</label>
+        <input type="number" step="0.01" min="0" @bind="_amountTolerance" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+    </div>
+    <div class="mt-5 flex items-center gap-3"><button type="button" @onclick="Save" disabled="@_saving" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Save parameters</button>@if (_message is not null) { <span class="text-sm text-emerald-600">@_message</span> }</div>
+</div>
+
+<div class="mt-6 max-w-2xl rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Payment schemes</h2>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Add a scheme using the file formats configured for this deployment. Enter the bank or core-banking platform used by the scheme; the reconciliation pages are added to the menu on the next application start.</p>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2">
+        <input @bind="_schemeName" placeholder="Display name (e.g. Visa)" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" />
+        <input @bind="_cms" placeholder="Bank / core-banking platform (e.g. SBI CBS)" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" />
+        <select @bind="_transactionAdapter" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" aria-label="Transaction file format">
+            @foreach (var adapter in _transactionAdapters) { <option value="@adapter.Code">@adapter.DisplayName</option> }
+        </select>
+        <select @bind="_glcAdapter" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700" aria-label="General ledger file format">
+            @foreach (var adapter in _glcAdapters) { <option value="@adapter.Code">@adapter.DisplayName</option> }
+        </select>
+        <select @bind="_functions" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700"><option value="PosToGl">POS recon</option><option value="AtmToGl">ATM recon</option><option value="InterchangeToGl">Bulk recon</option></select>
+    </div>
+    <button type="button" @onclick="AddScheme" disabled="@_addingScheme" class="mt-4 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Add scheme</button>
+    @if (_schemeMessage is not null) { <p class="mt-2 text-sm text-emerald-600">@_schemeMessage</p> }
+    <div class="mt-5 divide-y divide-gray-100 text-sm dark:divide-gray-700">@foreach (var scheme in _schemes) { <div class="flex justify-between py-2"><span class="font-medium">@scheme.Scheme</span><span class="text-gray-500">@scheme.Cms · @scheme.Functions</span></div> }</div>
+</div>
+
+@code {
+    private decimal _amountTolerance;
+    private bool _saving;
+    private string? _message;
+    private List<SchemeProfile> _schemes = [];
+    private IReadOnlyList<ITransactionAdapter> _transactionAdapters = [];
+    private IReadOnlyList<IGlcAdapter> _glcAdapters = [];
+    private string _schemeName = "", _cms = "", _transactionAdapter = "", _glcAdapter = "", _functions = "PosToGl";
+    private bool _addingScheme;
+    private string? _schemeMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _transactionAdapters = Adapters.TransactionAdapters.OrderBy(x => x.DisplayName).ToList();
+        _glcAdapters = Adapters.GlcAdapters.OrderBy(x => x.DisplayName).ToList();
+        _transactionAdapter = _transactionAdapters.FirstOrDefault()?.Code ?? "";
+        _glcAdapter = _glcAdapters.FirstOrDefault()?.Code ?? "";
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _amountTolerance = await db.ReconParameters.Select(x => x.AmountTolerance).FirstOrDefaultAsync();
+        _schemes = await db.SchemeProfiles.OrderBy(x => x.Scheme).ToListAsync();
+    }
+
+    private async Task Save()
+    {
+        if (_amountTolerance < 0) return;
+        _saving = true; _message = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var settings = await db.ReconParameters.FirstOrDefaultAsync();
+            if (settings is null) { settings = new ReconParameters(); db.ReconParameters.Add(settings); }
+            settings.AmountTolerance = Math.Round(_amountTolerance, 4);
+            await db.SaveChangesAsync();
+            _message = "Parameters saved. New runs can opt in to this amount tolerance.";
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task AddScheme()
+    {
+        if (string.IsNullOrWhiteSpace(_schemeName) || Adapters.Transaction(_transactionAdapter) is null || Adapters.Glc(_glcAdapter) is null) return;
+        _addingScheme = true; _schemeMessage = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var scheme = _schemeName.Trim();
+            if (await db.SchemeProfiles.AnyAsync(x => x.Scheme == scheme)) { _schemeMessage = "That scheme already exists."; return; }
+            db.SchemeProfiles.Add(new SchemeProfile { Name = scheme, Scheme = scheme, Cms = _cms.Trim(), TransactionAdapterCode = _transactionAdapter, GlcAdapterCode = _glcAdapter, Functions = _functions, IsActive = true });
+            await db.SaveChangesAsync();
+            _schemes = await db.SchemeProfiles.OrderBy(x => x.Scheme).ToListAsync(); _schemeName = ""; _schemeMessage = "Scheme added. Restart the application to add its menu pages.";
+        }
+        finally { _addingScheme = false; }
+    }
+}

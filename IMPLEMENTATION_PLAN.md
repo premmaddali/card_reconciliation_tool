@@ -65,15 +65,17 @@ C:\Projects\ReconTool
 - [x] Content-hash duplicate guard; per-file parse report on the Upload page; `/batches` list
 - [x] Tests (`Recon.Web.Tests`, xUnit, throwaway DBs): T464 count 11,533 + amount/date/ccy normalization; ATM channel + NULL-fee + sign; duplicate rejection — **3/3 passing**
 
-## Phase 3 — Reconciliation engine  ✅ (2026-08-14) — model revised per analyst input
+## Phase 3 — Reconciliation engine  ✅ (2026-08-14; Mastercard correction 2026-08-27)
 The three-pass idea was replaced by the analyst's actual model (see **[RECON_ENGINE.md](RECON_ENGINE.md)**):
-**three processor → GL functions**, matched by **weighted confidence**
+**two processor → GL functions** (POS and Bulk), matched by **weighted confidence**
 (amount + date primary; reference + channel add weight), summarised daily + monthly.
-- [x] `ReconEngine` with `ReconFunction` entry points AtmToGl / PosToGl / InterchangeToGl
+- [x] `ReconEngine` with `ReconFunction` entry points PosToGl / InterchangeToGl; ATM is Network ↔ ATM only because no ATM GL exists
 - [x] GL scoped to 6 seeded `GlSettlementAccount`s; channel via `POS/`·`CASH/` particular prefix; currency routing
-- [x] Weighted scorer (`MatchWeights`, appsettings-configurable), greedy assignment, reference-identity amount-mismatch detection
+- [x] Weighted scorer (`MatchWeights`, appsettings-configurable), greedy assignment, adapter-defined match key (debit `ReferenceNumber`; credit `MicrofilmRefNumber` ↔ `TranParticular2.Substring(12)`), and transaction-code-aware duplicate identity
+- [x] Review fields and filters in the reconciliation register and Advanced Analysis: `Reference`, `Microfilm`, and effective `TRAN_PARTICULAR_2`.
 - [x] Persist `ReconMatch` + `ReconException` + `ReconPassSummary` (daily & monthly, currency bucketed to MUR/USD/EUR/Other)
-- [x] Verified on real March data: POS 54,623/71,641 · ATM 5,742/22,987 · Bulk 62,385/107,544
+- [ ] Re-run and sign off Mastercard March acceptance counts after the corrected credit-key rule. Historical
+  figures (POS 54,623/71,641 · ATM 5,742/22,987 · Bulk 62,385/107,544) are superseded.
 - [x] Network ↔ ATM reconciliation: a separate T464 + ATM batch, no GL side, with per-reference
    match/mismatch/one-sided/duplicate validation outcomes
 
@@ -116,10 +118,13 @@ refactor — legacy path kept runnable until output parity, engine matching math
 ---
 
 ## Open items to confirm with analysts
-1. **Match granularity for Pass 1** — is a single `ReferenceNumber` unique per settlement, or can it
+1. **Credit acceptance baseline** — validate the measured match rate and unmatched population after the
+   `TRAN_PARTICULAR_2.Substring(12)` correction, including any records whose GL prefix does not follow the
+   twelve-character BankOne pattern.
+2. **Match granularity for Pass 1** — is a single `ReferenceNumber` unique per settlement, or can it
    repeat (partial/reversal)? Affects duplicate handling.
-2. **GL tie-out basis for Pass 3** — do analysts reconcile GL to processor by **daily settlement batch
+3. **GL tie-out basis for Pass 3** — do analysts reconcile GL to processor by **daily settlement batch
    total**, by **MUR-equivalent**, or by original currency per account? DataModel currently assumes
    date×currency×account totals.
-3. **Which report is "authoritative"** when Network (T464) and Processor (ATM) disagree — the validation
+4. **Which report is "authoritative"** when Network (T464) and Processor (ATM) disagree — the validation
    now surfaces both one-sided outcomes; analysts still need to decide which is actionable.

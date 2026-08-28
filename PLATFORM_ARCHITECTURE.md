@@ -172,3 +172,9 @@ On agreement, implementation proceeds phase by phase with the regression fixture
 
 **Remaining follow-ups**: route `ImportService` detection through `IAdapterRegistry`; SchemeProfile admin
 screen; real adapters for Visa/UnionPay/RuPay/domestic schemes; clear demo rows before production use.
+# Adapter-owned matching keys
+
+Determining the business match key is an adapter responsibility. For example, BankOne Debit emits
+`ReferenceNumber`, BankOne Credit emits `MicrofilmRefNumber`, and a future Visa adapter may emit a retrieval
+reference number. The engine consumes the normalized key only; for BankOne credit the GL adapter supplies the
+key from `TRAN_PARTICULAR_2` after its twelve-character posting prefix.

@@ -493,6 +493,134 @@ namespace Recon.Web.Migrations
                     b.ToTable("UserAppAccess", (string)null);
                 });
 
+            modelBuilder.Entity("Recon.Web.Domain.Import.BatchArchive", b =>
+                {
+                    b.Property<int>("BatchArchiveId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("BatchArchiveId"));
+
+                    b.Property<Guid>("ArchivedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("ArchivedByFreeze")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("ArchivedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte>("Function")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int>("OriginalReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("PeriodEnd")
+                        .HasColumnType("date");
+
+                    b.Property<string>("PeriodKey")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
+
+                    b.Property<DateOnly?>("PeriodStart")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("SchemeProfileId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("BatchArchiveId");
+
+                    b.HasIndex("OriginalReconRunId")
+                        .IsUnique();
+
+                    b.HasIndex("Function", "PeriodKey", "SchemeProfileId");
+
+                    b.ToTable("BatchArchives");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Import.BatchArchiveTransaction", b =>
+                {
+                    b.Property<int>("BatchArchiveTransactionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("BatchArchiveTransactionId"));
+
+                    b.Property<int>("BatchArchiveId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("GlAmount")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<byte>("MatchStatus")
+                        .HasColumnType("tinyint");
+
+                    b.Property<decimal?>("ReconciliationAmount")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("BatchArchiveTransactionId");
+
+                    b.HasIndex("BatchArchiveId");
+
+                    b.ToTable("BatchArchiveTransactions");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Import.BatchFreeze", b =>
+                {
+                    b.Property<int>("BatchFreezeId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("BatchFreezeId"));
+
+                    b.Property<Guid>("FrozenBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("FrozenDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("FrozenFromReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<byte>("Function")
+                        .HasColumnType("tinyint");
+
+                    b.Property<DateOnly?>("PeriodEnd")
+                        .HasColumnType("date");
+
+                    b.Property<string>("PeriodKey")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
+
+                    b.Property<DateOnly?>("PeriodStart")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("SchemeProfileId")
+                        .HasColumnType("int");
+
+                    b.HasKey("BatchFreezeId");
+
+                    b.HasIndex("Function", "PeriodKey", "SchemeProfileId")
+                        .IsUnique()
+                        .HasFilter("[SchemeProfileId] IS NOT NULL");
+
+                    b.ToTable("BatchFreezes");
+                });
+
             modelBuilder.Entity("Recon.Web.Domain.Import.ImportBatch", b =>
                 {
                     b.Property<int>("ImportBatchId")
@@ -563,6 +691,12 @@ namespace Recon.Web.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconRunId"));
 
+                    b.Property<decimal?>("AmountTolerance")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<bool>("ApplyAmountTolerance")
+                        .HasColumnType("bit");
+
                     b.Property<decimal>("AverageConfidence")
                         .HasColumnType("decimal(5,2)");
 
@@ -586,6 +720,9 @@ namespace Recon.Web.Migrations
 
                     b.Property<int?>("GlBatchId")
                         .HasColumnType("int");
+
+                    b.Property<bool>("IsArchived")
+                        .HasColumnType("bit");
 
                     b.Property<int>("MatchedCount")
                         .HasColumnType("int");
@@ -924,8 +1061,16 @@ namespace Recon.Web.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
 
+                    b.Property<string>("GlParticular2")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<DateTime?>("GlPostingDateTime")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("GlReference")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<int?>("GlStagingId")
                         .HasColumnType("int");
@@ -942,6 +1087,10 @@ namespace Recon.Web.Migrations
 
                     b.Property<byte>("MatchStatus")
                         .HasColumnType("tinyint");
+
+                    b.Property<string>("MicrofilmRefNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
 
                     b.Property<string>("ProcessorAccountNumber")
                         .HasMaxLength(128)
@@ -1007,6 +1156,22 @@ namespace Recon.Web.Migrations
                     b.HasIndex("ReconRunId", "MatchStatus");
 
                     b.ToTable("ReconMatches");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconParameters", b =>
+                {
+                    b.Property<int>("ReconParametersId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconParametersId"));
+
+                    b.Property<decimal>("AmountTolerance")
+                        .HasColumnType("decimal(19,4)");
+
+                    b.HasKey("ReconParametersId");
+
+                    b.ToTable("ReconParameters");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconPassSummary", b =>
@@ -2112,6 +2277,17 @@ namespace Recon.Web.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Recon.Web.Domain.Import.BatchArchiveTransaction", b =>
+                {
+                    b.HasOne("Recon.Web.Domain.Import.BatchArchive", "BatchArchive")
+                        .WithMany("Transactions")
+                        .HasForeignKey("BatchArchiveId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("BatchArchive");
+                });
+
             modelBuilder.Entity("Recon.Web.Domain.Import.ReconRun", b =>
                 {
                     b.HasOne("Recon.Web.Domain.Import.ImportBatch", "GlBatch")
@@ -2235,6 +2411,11 @@ namespace Recon.Web.Migrations
             modelBuilder.Entity("Recon.Web.Domain.Identity.AppUser", b =>
                 {
                     b.Navigation("UserAppAccesses");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Import.BatchArchive", b =>
+                {
+                    b.Navigation("Transactions");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconException", b =>

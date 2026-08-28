@@ -10,7 +10,7 @@ namespace Recon.Web.Platform.Adapters;
 public sealed class BankOneGlAdapter : IGlcAdapter
 {
     public string Code => "bankone-gl-dump";
-    public string DisplayName => "BankOne GL Dump (Finacle)";
+    public string DisplayName => "Core-banking GL export workbook";
     public SourceType? LegacySourceType => SourceType.GlDump;
 
     public bool CanDetect(HeaderMap headers) =>

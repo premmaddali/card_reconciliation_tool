@@ -1,11 +1,11 @@
 @page "/recon/atm"
-@using Recon.Web.Domain.Import
+@inject NavigationManager Navigation
 
 <PageTitle>ATM recon · Recon Tool</PageTitle>
 
-<ReconRunner Function="ReconFunction.AtmToGl"
-             Title="ATM reconciliation"
-             Subtitle="Match ATM settlement transactions to the GL cardholder-settlement (CASH) entries"
-             ShortName="ATM"
-             ProcessorLabel="ATM settlement"
-             ProcessorSource="SourceType.AtmSettlement" />
+<PageHeader Title="ATM reconciliation" Subtitle="ATM has no corresponding General Ledger dataset. Use Network ↔ ATM reconciliation instead." Eyebrow="Reconciliation" Icon="atm" />
+
+<div class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+    ATM transactions are validated only between the T464 network settlement and ATM settlement files.
+    <a class="ml-1 font-semibold underline" href="/recon/network-atm">Open Network ↔ ATM reconciliation</a>.
+</div>

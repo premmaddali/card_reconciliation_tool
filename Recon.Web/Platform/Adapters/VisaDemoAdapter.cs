@@ -14,7 +14,7 @@ namespace Recon.Web.Platform.Adapters;
 public sealed class VisaDemoTransactionAdapter : ITransactionAdapter
 {
     public string Code => "visa-demo-csv";
-    public string DisplayName => "Visa Demo Settlement CSV";
+    public string DisplayName => "Card settlement CSV (demo template)";
     public SourceType? LegacySourceType => null;
 
     public bool CanDetect(HeaderMap headers) =>

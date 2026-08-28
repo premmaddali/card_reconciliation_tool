@@ -13,6 +13,8 @@ public class ReconMatch
     public ReconRun ReconRun { get; set; } = null!;
 
     public string? ReferenceNumber { get; set; }
+    /// <summary>Credit-card processor key from MICROFILM REF NUMBER. Never substitutes the debit reference.</summary>
+    public string? MicrofilmRefNumber { get; set; }
     public string? ProcessorAccountNumber { get; set; }
     /// <summary>Interchange product type, e.g. DC (debit) or CR (credit).</summary>
     public string? ProcessorProductType { get; set; }
@@ -21,6 +23,10 @@ public class ReconMatch
     /// <summary>Processor transaction narrative/wording.</summary>
     public string? ProcessorDescription { get; set; }
     public string? GlAccountNumber { get; set; }
+    /// <summary>GL-side match key: debit particular as-is; credit particular after its twelve-character posting prefix.</summary>
+    public string? GlReference { get; set; }
+    /// <summary>Raw GL TRAN_PARTICULAR_2 retained for analyst review, before any credit-prefix trimming.</summary>
+    public string? GlParticular2 { get; set; }
     /// <summary>GL transaction narrative and any supplementary remarks.</summary>
     public string? GlDescription { get; set; }
     public ReconSettlementLeg SettlementLeg { get; set; }

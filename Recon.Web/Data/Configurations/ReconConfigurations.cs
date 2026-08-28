@@ -4,6 +4,15 @@ using Recon.Web.Domain.Recon;
 
 namespace Recon.Web.Data.Configurations;
 
+public class ReconParametersConfiguration : IEntityTypeConfiguration<ReconParameters>
+{
+    public void Configure(EntityTypeBuilder<ReconParameters> b)
+    {
+        b.HasKey(x => x.ReconParametersId);
+        b.Property(x => x.AmountTolerance).HasColumnType("decimal(19,4)");
+    }
+}
+
 public class ReconMatchConfiguration : IEntityTypeConfiguration<ReconMatch>
 {
     public void Configure(EntityTypeBuilder<ReconMatch> b)
@@ -13,11 +22,14 @@ public class ReconMatchConfiguration : IEntityTypeConfiguration<ReconMatch>
         b.Property(x => x.ProcessorSource).HasConversion<byte>();
         b.Property(x => x.SettlementLeg).HasConversion<byte>().HasDefaultValue(ReconSettlementLeg.DebitCardholder);
         b.Property(x => x.ReferenceNumber).HasMaxLength(32);
+        b.Property(x => x.MicrofilmRefNumber).HasMaxLength(32);
         b.Property(x => x.ProcessorAccountNumber).HasMaxLength(128);
         b.Property(x => x.ProcessorProductType).HasMaxLength(4);
         b.Property(x => x.ProcessorMerchant).HasMaxLength(256);
         b.Property(x => x.ProcessorDescription).HasMaxLength(512);
         b.Property(x => x.GlDescription).HasMaxLength(512);
+        b.Property(x => x.GlReference).HasMaxLength(128);
+        b.Property(x => x.GlParticular2).HasMaxLength(128);
         b.Property(x => x.GlAccountNumber).HasMaxLength(20);
         b.Property(x => x.Confidence).HasColumnType("decimal(5,2)");
         b.Property(x => x.ScoreBreakdown).HasMaxLength(200);

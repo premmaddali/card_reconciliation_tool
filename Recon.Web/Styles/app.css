@@ -7,17 +7,17 @@
 @source "../obj/**/Flowbite/**/*.cs";
 
 @theme {
-    /* Indigo-leaning primary for stronger contrast against the neutral greys. */
-    --color-primary-50: #eef2ff;
-    --color-primary-100: #e0e7ff;
-    --color-primary-200: #c7d2fe;
-    --color-primary-300: #a5b4fc;
-    --color-primary-400: #818cf8;
-    --color-primary-500: #6366f1;
-    --color-primary-600: #4f46e5;
-    --color-primary-700: #4338ca;
-    --color-primary-800: #3730a3;
-    --color-primary-900: #312e81;
+    /* Reference-inspired olive green: used consistently for navigation, actions and focus. */
+    --color-primary-50: #f3f8e9;
+    --color-primary-100: #e2efc9;
+    --color-primary-200: #c7df9d;
+    --color-primary-300: #a9ca70;
+    --color-primary-400: #8ab544;
+    --color-primary-500: #6f982b;
+    --color-primary-600: #5a7f20;
+    --color-primary-700: #486719;
+    --color-primary-800: #385116;
+    --color-primary-900: #2e4314;
 
     /* Reconciliation card palette. Keep card colours centralised and semantic. */
     --color-card-info: #818cf8;
@@ -30,16 +30,131 @@
 /* Tabular figures for all amount/confidence columns. */
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
-/* Semantic status cards use the application theme rather than page-level utility colours. */
+/* Shared dashboard treatment: calm card surfaces, colour concentrated in compact icon tiles. */
 .recon-card {
-    border: 1px solid rgb(0 0 0 / 0.2);
-    color: #000;
+    border: 1px solid rgb(148 163 184 / 0.25);
+    background: rgb(255 255 255 / 0.92);
+    color: #172033;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.035), 0 8px 24px rgb(15 23 42 / 0.035);
 }
-.recon-card--info { background-color: var(--color-card-info); }
-.recon-card--processed { background-color: var(--color-card-processed); }
-.recon-card--warning { background-color: var(--color-card-warning); }
-.recon-card--duplicate { background-color: var(--color-card-duplicate); }
-.recon-card--exception { background-color: var(--color-card-exception); }
-.recon-card-muted { color: rgb(0 0 0 / 0.7); }
-.recon-card-icon, .recon-card-button { background-color: rgb(0 0 0 / 0.12); color: #000; }
-.recon-card-button:hover { background-color: rgb(0 0 0 / 0.2); }
+.recon-card--info { border-top: 3px solid var(--color-card-info); }
+.recon-card--processed { border-top: 3px solid var(--color-card-processed); }
+.recon-card--warning { border-top: 3px solid var(--color-card-warning); }
+.recon-card--duplicate { border-top: 3px solid var(--color-card-duplicate); }
+.recon-card--exception { border-top: 3px solid var(--color-card-exception); }
+.recon-card-muted { color: #64748b; }
+.recon-card-icon { color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.25); }
+.recon-card-icon--blue { background: linear-gradient(135deg, #8ab544, #5a7f20); }
+.recon-card-icon--green { background: linear-gradient(135deg, #35b977, #14875a); }
+.recon-card-icon--amber { background: linear-gradient(135deg, #f4ae3d, #d97706); }
+.recon-card-icon--violet { background: linear-gradient(135deg, #7fab36, #4f721e); }
+.recon-card-icon--red { background: linear-gradient(135deg, #ed7581, #ce4559); }
+.recon-card-button { background: #f3f8e9; color: #486719; }
+.recon-card-button:hover { background: #e2efc9; }
+
+.page-hero { background: linear-gradient(118deg, #385116 0%, #5a7f20 54%, #89b345 100%); box-shadow: 0 12px 30px rgb(72 103 25 / 0.18); }
+.app-shell { background: radial-gradient(circle at top right, rgb(226 239 201 / 0.72), transparent 32rem), #f8fafc; }
+
+/* Inputs deliberately override utility-class gaps so every form stays legible in dark mode. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea {
+    border-color: #cbd5e1;
+    color: #172033;
+    background-color: #fff;
+    caret-color: #5a7f20;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"])::placeholder, textarea::placeholder { color: #94a3b8; opacity: 1; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, select:focus, textarea:focus {
+    border-color: #6f982b;
+    outline: 2px solid rgb(111 152 43 / 0.22);
+    outline-offset: 1px;
+}
+
+.dark .recon-card { background: rgb(15 23 42 / 0.74); border-color: rgb(100 116 139 / 0.3); color: #f8fafc; box-shadow: none; }
+.dark .recon-card-muted { color: #94a3b8; }
+.dark .recon-card-button { background: rgb(111 152 43 / 0.19); color: #c7df9d; }
+.dark .recon-card-button:hover { background: rgb(111 152 43 / 0.3); }
+.dark .app-shell { background: radial-gradient(circle at top right, rgb(72 103 25 / 0.28), transparent 34rem), #070b14; }
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .dark select, .dark textarea {
+    color: #f8fafc !important;
+    background-color: #172033 !important;
+    border-color: #3a475c !important;
+    color-scheme: dark;
+}
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="file"])::placeholder, .dark textarea::placeholder { color: #94a3b8 !important; }
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, .dark select:focus, .dark textarea:focus { border-color: #8ab544 !important; outline-color: rgb(138 181 68 / 0.35); }
+
+/* Scheme landing cards use the same compact, icon-led interaction pattern as the dashboard. */
+.scheme-card { background: rgb(255 255 255 / 0.92); border-color: rgb(148 163 184 / 0.25); border-top: 3px solid #8ab544; box-shadow: 0 1px 2px rgb(15 23 42 / 0.035), 0 8px 24px rgb(15 23 42 / 0.035); }
+.scheme-card--mastercard, .scheme-card--unionpay { border-top-color: #d25349; }
+.scheme-card--visa { border-top-color: #3f6fc2; }
+.scheme-card--rupay { border-top-color: #d19035; }
+.scheme-card--domestic { border-top-color: #5f973b; }
+.scheme-logo { color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 6px 14px rgb(15 23 42 / 0.12); }
+.scheme-logo--mastercard { background: linear-gradient(135deg, #e65d54, #bf3634); }
+.scheme-logo--visa { background: linear-gradient(135deg, #4d83d6, #2753a3); }
+.scheme-logo--unionpay { background: linear-gradient(135deg, #d45a52, #9f3038); }
+.scheme-logo--rupay { background: linear-gradient(135deg, #e6a647, #bd7117); }
+.scheme-logo--domestic { background: linear-gradient(135deg, #72aa47, #3d772e); }
+.scheme-action { border-color: #e2e8f0; background: #f8fafc; color: #334155; }
+.scheme-action:hover { border-color: #c7df9d; background: #f3f8e9; color: #486719; }
+.scheme-action-icon { background: #e2efc9; color: #486719; }
+.scheme-action-arrow { background: #f3f8e9; color: #5a7f20; border: 1px solid #c7df9d; }
+.scheme-action:hover .scheme-action-arrow { background: #5a7f20; color: #fff; border-color: #5a7f20; }
+.dark .scheme-card { background: rgb(30 41 59 / 0.86); border-color: rgb(100 116 139 / 0.3); box-shadow: none; }
+.dark .scheme-action { border-color: rgb(71 85 105 / 0.58); background: rgb(51 65 85 / 0.62); color: #e2e8f0; }
+.dark .scheme-action:hover { border-color: #6f982b; background: rgb(90 127 32 / 0.18); color: #e2efc9; }
+.dark .scheme-action-icon { background: rgb(90 127 32 / 0.28); color: #c7df9d; }
+.dark .scheme-action-arrow { background: rgb(90 127 32 / 0.18); border-color: rgb(138 181 68 / 0.55); color: #a9ca70; }
+
+/* Verification panel remains readable and intentional in either theme. */
+.verification-panel { background: linear-gradient(100deg, #f3f8e9, #fff); border-color: #c7df9d; }
+.verification-panel-icon { background: #e2efc9; color: #486719; }
+.verification-panel-eyebrow { color: #5a7f20; }
+.verification-panel-text { color: #2e4314; }
+.verification-panel-subtext { color: #486719; }
+.dark .verification-panel { background: linear-gradient(100deg, rgb(46 67 20 / 0.52), rgb(23 32 20 / 0.66)); border-color: rgb(138 181 68 / 0.38); }
+.dark .verification-panel-icon { background: rgb(138 181 68 / 0.2); color: #c7df9d; }
+.dark .verification-panel-eyebrow { color: #a9ca70; }
+.dark .verification-panel-text { color: #f2f9e6; }
+.dark .verification-panel-subtext { color: #c7df9d; }
+
+/* Tables share readable, compact surfaces across reconciliation and administration pages. */
+table { border-collapse: separate; border-spacing: 0; }
+table thead { background: #f8fafc; }
+table thead th { color: #475569; font-weight: 700; }
+table tbody tr { transition: background-color 160ms ease; }
+table tbody tr:hover { background: rgb(243 248 233 / 0.55); }
+.dark table thead { background: rgb(30 41 59 / 0.88); }
+.dark table thead th { color: #cbd5e1; }
+.dark table tbody td { color: #e2e8f0; }
+.dark table tbody tr:hover { background: rgb(90 127 32 / 0.12); }
+.dark table tbody tr:nth-child(even) { background: rgb(30 41 59 / 0.25); }
+.dark table tbody tr:nth-child(even):hover { background: rgb(90 127 32 / 0.16); }
+
+/* Evidence is an information action; use a solid blue rather than an outline. */
+button[class*="border-primary-200"] { background: #2563eb; border-color: #2563eb !important; color: #fff !important; }
+button[class*="border-primary-200"]:hover { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }
+.dark button[class*="border-primary-200"] { background: #3b82f6; border-color: #3b82f6 !important; color: #fff !important; }
+.dark button[class*="border-primary-200"]:hover { background: #2563eb !important; border-color: #2563eb !important; }
+
+.analytics-card { background: rgb(255 255 255 / 0.92); border-color: rgb(148 163 184 / 0.25); box-shadow: 0 1px 2px rgb(15 23 42 / 0.035), 0 8px 24px rgb(15 23 42 / 0.035); }
+.analytics-donut { display:grid; place-items:center; width:10.5rem; aspect-ratio:1; border-radius:50%; position:relative; }
+.analytics-donut__center { display:flex; width:6.65rem; aspect-ratio:1; flex-direction:column; align-items:center; justify-content:center; border-radius:50%; background:#fff; color:#172033; }
+.analytics-donut__center strong { font-size:1.4rem; }
+.analytics-donut__center span { font-size:.72rem; color:#64748b; }
+.analytics-bar-track { height:.6rem; overflow:hidden; border-radius:999px; background:#e2e8f0; }
+.analytics-bar-fill { height:100%; border-radius:inherit; transition:width 300ms ease; }
+.dark .analytics-card { background:rgb(15 23 42 / .78); border-color:rgb(100 116 139 / .3); box-shadow:none; }
+.dark .analytics-donut__center { background:#0f172a; color:#f8fafc; }
+.dark .analytics-donut__center span { color:#94a3b8; }
+.dark .analytics-bar-track { background:#334155; }
+
+/* Radzen's advanced grid needs explicit theme tokens because it is not a native table. */
+.recon-analysis-grid .rz-datatable-thead > tr > th { background:#f8fafc; color:#475569; border-color:#e2e8f0; }
+.recon-analysis-grid .rz-datatable-tbody > tr > td { color:#334155; border-color:#e2e8f0; }
+.recon-analysis-grid .rz-datatable-tbody > tr:hover > td { background:#f3f8e9; }
+.dark .recon-analysis-grid .rz-datatable-thead > tr > th { background:#1e293b; color:#cbd5e1; border-color:#334155; }
+.dark .recon-analysis-grid .rz-datatable-tbody > tr > td { background:#0f172a; color:#e2e8f0; border-color:#334155; }
+.dark .recon-analysis-grid .rz-datatable-tbody > tr:nth-child(even) > td { background:#162033; }
+.dark .recon-analysis-grid .rz-datatable-tbody > tr:hover > td { background:#20331b; }
+.dark .recon-analysis-grid .rz-paginator { background:#0f172a; color:#cbd5e1; border-color:#334155; }

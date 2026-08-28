@@ -1,6 +1,7 @@
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @inject Recon.Web.Services.Import.IImportService ImportService
 @inject Recon.Web.Services.Recon.IReconEngine Engine
+@inject Recon.Web.Services.Recon.IBatchArchiveService BatchArchive
 @inject NavigationManager Nav
 @using Microsoft.EntityFrameworkCore
 @using Recon.Web.Domain.Import
@@ -28,7 +29,7 @@
                 </div>
             </div>
 
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">@ProcessorLabel file (TRX)</label>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">CMS transaction file</label>
             <div class="mb-4 flex min-w-0 items-center gap-3">
                 <InputFile id="trx-upload" OnChange="OnTrxSelected" accept=".xlsx,.csv" disabled="@_running" class="sr-only" />
                 <label for="trx-upload" class="inline-flex shrink-0 cursor-pointer items-center rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 @(_running ? "pointer-events-none opacity-50" : "")">
@@ -37,7 +38,7 @@
                 <span class="min-w-0 truncate text-sm @(_trxFile is null ? "text-gray-400" : "text-emerald-600 dark:text-emerald-400")">@(_trxFile?.Name ?? "No file selected")</span>
             </div>
 
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">GL dump file</label>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Bank ledger file</label>
             <div class="mb-4 flex min-w-0 items-center gap-3">
                 <InputFile id="gl-upload" OnChange="OnGlSelected" accept=".xlsx,.csv" disabled="@_running" class="sr-only" />
                 <label for="gl-upload" class="inline-flex shrink-0 cursor-pointer items-center rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 @(_running ? "pointer-events-none opacity-50" : "")">
@@ -45,6 +46,14 @@
                 </label>
                 <span class="min-w-0 truncate text-sm @(_glFile is null ? "text-gray-400" : "text-emerald-600 dark:text-emerald-400")">@(_glFile?.Name ?? "No file selected")</span>
             </div>
+
+            <fieldset class="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-700/30">
+                <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Run parameters</legend>
+                <label class="flex items-start gap-2.5 text-sm text-gray-700 dark:text-gray-200">
+                    <input type="checkbox" @bind="_applyAmountTolerance" disabled="@(_running || _configuredAmountTolerance <= 0)" class="mt-0.5 rounded border-gray-300 text-primary-600" />
+                    <span><span class="font-semibold">Apply amount tolerance for this new run</span><br /><span class="text-xs text-gray-500 dark:text-gray-400">Accept matching amounts within @(_configuredAmountTolerance.ToString("N2")) and record “Tolerance applied”. Existing completed batches are unchanged.</span></span>
+                </label>
+            </fieldset>
 
             @if (_warning is not null)
             {
@@ -176,6 +185,8 @@
     private int _progressStep;
     private int _reconProcessed, _reconTotal, _reconMatched;
     private bool _awaitingDuplicateConfirmation;
+    private bool _applyAmountTolerance;
+    private decimal _configuredAmountTolerance;
     private TaskCompletionSource<bool>? _duplicateConfirmation;
     private List<ReconRun> _runs = new();
 
@@ -186,12 +197,13 @@
     private async Task Load()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        var query = db.ReconRuns.Where(r => r.Function == Function && r.Status == ReconRunStatus.Completed);
+        var query = db.ReconRuns.Where(r => r.Function == Function && r.Status == ReconRunStatus.Completed && !r.IsArchived);
         // Scheme-scoped screens show only their own runs; legacy screens show unscoped runs.
         query = SchemeProfileId is { } sp
             ? query.Where(r => r.SchemeProfileId == sp)
             : query.Where(r => r.SchemeProfileId == null);
         _runs = await query.OrderByDescending(r => r.CreatedDate).Take(20).ToListAsync();
+        _configuredAmountTolerance = await db.ReconParameters.Select(p => p.AmountTolerance).FirstOrDefaultAsync();
     }
 
     private void OnTrxSelected(InputFileChangeEventArgs e) { _trxFile = e.File; _confirmNeeded = false; _warning = null; _error = null; }
@@ -204,6 +216,7 @@
         var from = DateOnly.FromDateTime(_from);
         var to = DateOnly.FromDateTime(_to);
         if (to < from) { _error = "Period 'to' must be on or after 'from'."; return; }
+        if (await BatchArchive.IsFrozenAsync(Function, from, to, SchemeProfileId)) { _error = "This reconciliation period is frozen. No further files can be uploaded or processed for it."; return; }
 
         // Duplicate period warning (proceed on second click).
         if (!_confirmNeeded)
@@ -257,7 +270,7 @@
                 _reconMatched = p.Matched;
                 _ = InvokeAsync(StateHasChanged);
             });
-            var result = await Engine.RunAsync(Function, trx.ImportBatchId!.Value, gl.ImportBatchId!.Value, periodKey, from, to, default, liveProgress, PauseBeforeAmbiguousPassAsync, SchemeProfileId);
+            var result = await Engine.RunAsync(Function, trx.ImportBatchId!.Value, gl.ImportBatchId!.Value, periodKey, from, to, default, liveProgress, PauseBeforeAmbiguousPassAsync, SchemeProfileId, _applyAmountTolerance, _configuredAmountTolerance);
             _allowCompletionNavigation = true;
             Nav.NavigateTo($"/recon/run/{result.ReconRunId}");
         }

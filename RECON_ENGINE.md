@@ -1,9 +1,9 @@
 # ReconTool — Reconciliation Engine Spec (MasterCard)
 
-The MasterCard reconciliation has **four independent functions**, each its own menu option. ATM, POS,
-and Bulk match a processor file against the bank GL using a weighted confidence score. Network ↔ ATM
-validates the T464 network settlement file against ATM settlement by reference, amount, currency, and fee;
-it has no GL side. The engine is generic: sources, GL scope and weights are configuration, so other schemes
+The MasterCard reconciliation has **three independent functions**, each its own menu option. POS and Bulk
+match a processor file against the bank GL using a weighted confidence score. Network ↔ ATM validates the
+T464 network settlement file against ATM settlement by reference, amount, currency, and fee; it has no GL
+side. The engine is generic: sources, GL scope and weights are configuration, so other schemes
 can be added later.
 
 > **Platform note (branch `recon_platform`):** the engine now loads rows from the normalized platform
@@ -18,13 +18,11 @@ can be added later.
 
 | Function | Processor source | GL scope | Notes |
 |---|---|---|---|
-| **ATM Recon** | File 1 — ATM settlement | Cardholder-settlement rows where `TRAN_PARTICULAR` starts `CASH` | timestamp differences expected → wider date tolerance |
 | **POS Recon** | File 2 — POS settlement | Cardholder-settlement rows where `TRAN_PARTICULAR` starts `POS` | |
 | **Bulk Recon** | File 3 — Interchange (all card txns) | All cardholder-settlement rows | superset; credit + debit |
 | **Network ↔ ATM Recon** | File 5 — T464 network settlement + File 1 — ATM settlement | No GL | unique reference comparison; mismatch, one-sided, and duplicate outcomes |
 
-The Network ↔ ATM function is separate from ATM → GL, so a network-side discrepancy does not alter the
-ATM-to-GL match result.
+There is currently no ATM General Ledger. ATM transactions are reconciled only by the Network ↔ ATM function.
 
 ## GL scope — the six accounts (verified present in the sample)
 
@@ -39,7 +37,8 @@ Currency of a processor transaction routes it to the matching cardholder account
 `TRANSACTION_CURRENCY`). Matching happens against the **cardholder-settlement** rows — these carry the
 per-transaction detail:
 
-- `TRAN_PARTICULAR_2` = the 12-digit reference number (same domain as processor `REFERENCE_NUMBER`).
+- Debit matching uses `TRAN_PARTICULAR_2` as the processor `REFERENCE_NUMBER`.
+- Credit matching uses `TRAN_PARTICULAR_2.Substring(12)` as processor `MICROFILM REF NUMBER`; the first twelve GL characters are the BankOne posting prefix.
 - `TRAN_PARTICULAR` = `POS/…` or `CASH/…` (+ `REFUND`, `REVERSAL`, `CREDIT` variants) = channel.
 - `TRAN_AMT` = amount in the account currency; `DEBIT`/`CREDIT` = direction.
 - `TRAN_DATE` = posting date.
@@ -56,7 +55,7 @@ date/time are primary; reference, card and channel add weight.** Weights are con
 |---|---|---|
 | **Amount** | `|P.amount − G.TranAmt| ≤ 0.01` (account currency) | **45** (primary) |
 | **Date** | same posting date = full; else linear decay across the tolerance window (ATM wider) | **33** (primary) |
-| Reference | `P.ReferenceNumber == G.TranParticular2` | 17 |
+| Match key | adapter-defined: debit `ReferenceNumber`; credit `MicrofilmRefNumber == TranParticular2.Substring(12)` | 17 |
 | Channel | `POS`/`CASH` prefix matches the function | 5 |
 | Card / Time | reserved — GL cardholder rows carry neither, so scored 0 for now | 0 |
 | **Total** | | **100** |
@@ -74,11 +73,15 @@ usable reference — still matches on amount and date. Weights and tolerances ar
 - **Unmatched (GL)** — cardholder-settlement rows no processor txn claimed → exception.
 - A GL row is consumed by at most one processor txn (greedy by descending confidence).
 
-### Verified on the March sample (2026-08-14)
+### Superseded baseline (2026-08-14)
+
+These counts predate the corrected Mastercard credit key (`MICROFILM REF NUMBER` ↔
+`TRAN_PARTICULAR_2.Substring(12)`) and must not be used as the current acceptance baseline. Re-run Bulk
+reconciliation and record the credit/debit match-rate results before accepting the next release.
+
 | Function | Processor rows | Matched | Exceptions | Notes |
 |---|---|---|---|---|
 | **POS → GL** | 71,641 | 54,623 | 34,301 | most POS tie to GL `POS/` rows |
-| **ATM → GL** | 22,987 | 5,742 | 17,331 | only ~6k ATM exist in GL cardholder accounts — the rest is a real finding |
 
 ### Candidate generation (keeps it O(n))
 Index GL cardholder rows by `(currency, roundedAmount)`. Amount is selective, so each processor txn
@@ -86,14 +89,14 @@ yields a small candidate set; score those within the date-tolerance window only.
 
 ## Outputs
 
-- **ReconMatch** per processor txn: chosen GL row, confidence, tier, both amounts/dates.
+- **ReconMatch** per processor txn: chosen GL row, confidence, tier, both amounts/dates, plus review fields
+  `ReferenceNumber`, `MicrofilmRefNumber`, and the effective `TRAN_PARTICULAR_2` value.
 - **ReconException** for every Unmatched/Ambiguous/AmountMismatch, with narrative + analyst workflow.
 - **Summaries** per function run, by currency, at **two grains**: daily (`Day` set) and monthly
   (`Day` null) — matched vs exception counts and amounts, plus average confidence.
 
 ## Known data realities (from profiling the March sample)
-- POS references align well with GL (~90% found); ATM references mostly do **not** (only ~25% in GL by
-  reference) and ATM settles in USD — which is exactly why amount+date/time weighting is primary.
+- Duplicate analysis treats `(match key, TRANSACTION_CODE)` as transaction identity: `01` purchase, `04` cash, and `09` credit are separate events even when the key repeats.
 - ~91% of POS matches tie to `TRAN_AMT` exactly; the rest are real amount exceptions or FX cases.
 - GL `REF_NUM` column is unusable (all `NULL` on these accounts) — the reference lives in
   `TRAN_PARTICULAR_2`.

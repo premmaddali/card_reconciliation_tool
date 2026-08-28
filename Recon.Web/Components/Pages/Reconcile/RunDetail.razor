@@ -1,8 +1,11 @@
 @page "/recon/run/{RunId:int}"
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject NavigationManager Nav
 @inject Recon.Web.Services.Recon.IExceptionWorkflowService Workflow
 @inject Recon.Web.Services.Recon.IReconVerificationService Verification
+@inject Recon.Web.Services.Recon.IBatchArchiveService ArchiveService
 @inject Recon.Web.Services.ICurrentUserService CurrentUser
+@inject Recon.Web.Services.IPermissionService Permissions
 @using Microsoft.EntityFrameworkCore
 @using Recon.Web.Domain.Import
 @using Recon.Web.Domain.Recon
@@ -33,8 +36,8 @@ else
         </div>
     </section>
 
-    <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900 dark:bg-primary-950/30">
-        <div><p class="text-xs font-semibold uppercase tracking-wide text-primary-700 dark:text-primary-300">Verification workflow</p><p class="mt-1 text-sm font-semibold text-primary-950 dark:text-primary-100">@VerificationText()</p>@if (!string.IsNullOrWhiteSpace(_run.ResponsibleActor)) { <p class="mt-0.5 text-xs text-primary-800 dark:text-primary-200">Responsible role(s): @_run.ResponsibleActor</p> }</div>
+    <div class="verification-panel mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
+        <div class="flex items-center gap-3"><span class="verification-panel-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"><CheckCircleIcon Class="h-5 w-5" /></span><div><p class="verification-panel-eyebrow text-xs font-semibold uppercase tracking-wide">Verification workflow</p><p class="verification-panel-text mt-1 text-sm font-semibold">@VerificationText()</p>@if (!string.IsNullOrWhiteSpace(_run.ResponsibleActor)) { <p class="verification-panel-subtext mt-0.5 text-xs">Responsible role(s): @_run.ResponsibleActor</p> }</div></div>
         @if (_run.VerificationStatus == ReconVerificationStatus.NotSubmitted)
         {
             <button type="button" @onclick="SubmitForVerification" disabled="@_submitting" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Submit for verification</button>
@@ -45,21 +48,27 @@ else
         }
     </div>
     @if (_verificationError is not null) { <p class="-mt-3 mb-4 text-sm text-red-600">@_verificationError</p> }
+    <div class="mb-5 flex flex-wrap justify-end gap-2">
+        @if (_canArchive) { <button type="button" @onclick="ArchiveBatch" disabled="@_archiving" class="rounded-lg border border-amber-400 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:text-amber-200">Archive this batch</button> }
+        @if (_canFreeze) { <button type="button" @onclick="FreezePeriod" disabled="@_archiving" class="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50">Freeze period and archive runs</button> }
+    </div>
+    @if (_archiveError is not null) { <p class="-mt-3 mb-4 text-sm text-red-600">@_archiveError</p> }
 
     <!-- Run-level indicators remain visible while reviewing either source or reconciliation data. -->
     @if (_interchangeAudit is not null)
     {
         <div class="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="recon-card recon-card--exception rounded-xl p-4 text-black shadow-sm"><p class="text-xs font-semibold uppercase tracking-wide">Row difference</p><p class="mt-2 text-3xl font-bold">@_interchangeAudit.RowDifference.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">Interchange @_interchangeAudit.InterchangeRows.ToString("N0") · GL @_interchangeAudit.GlRows.ToString("N0")</p></div>
-            <div class="recon-card recon-card--duplicate rounded-xl p-4 text-black shadow-sm"><p class="text-xs font-semibold uppercase tracking-wide">Interchange duplicates</p><p class="mt-2 text-3xl font-bold">@_interchangeAudit.InterchangeDuplicateGroups.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">duplicate references · @_interchangeAudit.InterchangeExtraRows.ToString("N0") extra rows</p></div>
-            <div class="recon-card recon-card--duplicate rounded-xl p-4 text-black shadow-sm"><p class="text-xs font-semibold uppercase tracking-wide">GL duplicates</p><p class="mt-2 text-3xl font-bold">@_interchangeAudit.GlDuplicateGroups.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">duplicate references · @_interchangeAudit.GlExtraRows.ToString("N0") extra rows</p></div>
-            <div class="recon-card recon-card--info rounded-xl p-4 text-black shadow-sm"><p class="text-xs font-semibold uppercase tracking-wide">Duplicate information</p><p class="mt-2 text-sm font-medium">Review every repeated reference and its underlying source rows.</p><button type="button" @onclick="OpenDuplicateDrawer" class="recon-card-button mt-3 rounded-lg px-3 py-2 text-xs font-semibold">View duplicate info</button></div>
+            <div class="recon-card recon-card--exception rounded-xl p-4 shadow-sm"><div class="flex items-center gap-2"><span class="recon-card-icon recon-card-icon--red rounded-xl p-2"><ChartIcon Class="h-4 w-4" /></span><p class="text-xs font-semibold uppercase tracking-wide">Row difference</p></div><p class="mt-2 text-3xl font-bold text-rose-600 dark:text-rose-300">@_interchangeAudit.RowDifference.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">Interchange @_interchangeAudit.InterchangeRows.ToString("N0") · GL @_interchangeAudit.GlRows.ToString("N0")</p></div>
+            <div class="recon-card recon-card--duplicate rounded-xl p-4 shadow-sm"><div class="flex items-center gap-2"><span class="recon-card-icon recon-card-icon--amber rounded-xl p-2"><ExclamationTriangleIcon Class="h-4 w-4" /></span><p class="text-xs font-semibold uppercase tracking-wide">Interchange duplicates</p></div><p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-300">@_interchangeAudit.InterchangeDuplicateGroups.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">duplicate references · @_interchangeAudit.InterchangeExtraRows.ToString("N0") extra rows</p></div>
+            <div class="recon-card recon-card--duplicate rounded-xl p-4 shadow-sm"><div class="flex items-center gap-2"><span class="recon-card-icon recon-card-icon--amber rounded-xl p-2"><ListIcon Class="h-4 w-4" /></span><p class="text-xs font-semibold uppercase tracking-wide">GL duplicates</p></div><p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-300">@_interchangeAudit.GlDuplicateGroups.ToString("N0")</p><p class="recon-card-muted mt-1 text-xs">duplicate references · @_interchangeAudit.GlExtraRows.ToString("N0") extra rows</p></div>
+            <div class="recon-card recon-card--info rounded-xl p-4 shadow-sm"><div class="flex items-center gap-2"><span class="recon-card-icon recon-card-icon--blue rounded-xl p-2"><ListIcon Class="h-4 w-4" /></span><p class="text-xs font-semibold uppercase tracking-wide">Duplicate information</p></div><p class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100">Review every repeated reference and its underlying source rows.</p><button type="button" @onclick="OpenDuplicateDrawer" class="recon-card-button mt-3 rounded-lg px-3 py-2 text-xs font-semibold">View duplicate info</button></div>
         </div>
     }
-    <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard Label="Processor txns" Value="@_run.ProcessorCount.ToString("N0")" Accent="green"><Icon><TableRowIcon Class="h-5 w-5" /></Icon></StatCard>
         <StatCard Label="Matched" Value="@_run.MatchedCount.ToString("N0")" Hint="@MatchPct()" Accent="green"><Icon><CheckCircleIcon Class="h-5 w-5" /></Icon></StatCard>
-        <StatCard Label="Exceptions" Value="@_run.ExceptionCount.ToString("N0")" Accent="red"><Icon><ExclamationTriangleIcon Class="h-5 w-5" /></Icon></StatCard>
+        <StatCard Label="Processor exceptions" Value="@_processorExceptionCount.ToString("N0")" Hint="amount mismatch or no GL match" Accent="red"><Icon><ExclamationTriangleIcon Class="h-5 w-5" /></Icon></StatCard>
+        <StatCard Label="GL-only entries" Value="@_glOnlyExceptionCount.ToString("N0")" Hint="GL entries with no processor match" Accent="amber"><Icon><ExclamationTriangleIcon Class="h-5 w-5" /></Icon></StatCard>
         <StatCard Label="Avg confidence" Value="@($"{_run.AverageConfidence:0.0}%")" Hint="matched rows" Accent="violet"><Icon><ChartIcon Class="h-5 w-5" /></Icon></StatCard>
     </div>
     @if (_run.Function is ReconFunction.AtmToGl or ReconFunction.NetworkToAtm && _networkValidationTotal > 0)
@@ -104,6 +113,12 @@ else
             <button type="button" @onclick="() => SelectTab(Tab.Transactions)" class="@TabClass(Tab.Transactions)">
                 Transactions <span class="ml-1 text-xs text-gray-400">@_trxTotal.ToString("N0")</span>
             </button>
+            @if (_run.Function == ReconFunction.InterchangeToGl)
+            {
+                <button type="button" @onclick="() => SelectTab(Tab.OnUsAtmTransactions)" class="@TabClass(Tab.OnUsAtmTransactions)">
+                    On-Us ATM transactions <span class="ml-1 text-xs text-gray-400">@_onUsAtmTotal.ToString("N0")</span>
+                </button>
+            }
         }
         @if (_run.GlBatchId is not null)
         {
@@ -116,13 +131,11 @@ else
         }
     </div>
 
-    @if (_run.GlBatchId is not null)
+    @if (_tab == Tab.OnUsAtmTransactions)
     {
-    <div class="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm dark:border-gray-700 dark:bg-gray-800">
-        <span class="font-semibold text-gray-700 dark:text-gray-200">Settlement leg</span>
-        <label class="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"><input type="radio" name="accountLeg" checked='@(_accountLeg == "debit")' @onchange='() => SetAccountLeg("debit")' /> Debit cardholder</label>
-        <label class="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"><input type="radio" name="accountLeg" checked='@(_accountLeg == "credit")' @onchange='() => SetAccountLeg("credit")' /> Credit intermediary</label>
-    </div>
+        <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <span class="font-semibold">Excluded from reconciliation.</span> These On-Us ATM withdrawals have Origin code 0 and are not posted to the GL.
+        </div>
     }
 
     @if ((_tab == Tab.Reconciliation && _run.Function == ReconFunction.NetworkToAtm) || _tab == Tab.NetworkValidation)
@@ -220,34 +233,34 @@ else
                     <select @bind="_matchCardTypeFilter" @bind:after="ReloadMatches" class="rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="">All card types</option><option value="DC">DC · Debit</option><option value="CR">CR · Credit</option><option value="blank">No card type</option></select>
                     <input type="number" step="0.01" min="0" @bind="_maxDifference" @bind:after="ReloadMatches" placeholder="Max diff e.g. 1.00" class="w-36 rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
                     <select @bind="_matchLegFilter" @bind:after="ReloadMatches" class="rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="">Both legs</option><option value="1">Debit cardholder</option><option value="2">Credit intermediary</option></select>
-                    <select value="@_matchSort" @onchange="SetMatchSortFromSelect" aria-label="Sort reconciliation results" class="rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="date">Sort: transaction date</option><option value="gl_date">Sort: GL transaction date</option><option value="gl_posting">Sort: GL posting date</option><option value="confidence">Sort: confidence</option></select>
+                    <select value="@_matchSort" @onchange="SetMatchSortFromSelect" aria-label="Sort reconciliation results" class="rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="date">Sort: transaction date</option><option value="gl_date">Sort: GL transaction date</option><option value="gl_posting">Sort: GL posting date</option><option value="difference">Sort: difference</option><option value="confidence">Sort: confidence</option></select>
                     <button type="button" @onclick="ToggleMatchSortDirection" title="Toggle sort direction" class="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700">@(_matchSortDescending ? "Descending ↓" : "Ascending ↑")</button>
                     <button type="button" disabled="@(_selectedMatchIds.Count == 0)" @onclick="OpenBulkMatchDrawer" class="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-emerald-800 dark:text-emerald-300">Match selected (@_selectedMatchIds.Count)</button>
                     <a href="@MatchExportUrl()" class="ml-1 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700">Download CSV</a>
                 </div>
             </div>
-            <div class="overflow-x-auto" aria-label="Match results table; scroll horizontally to view all columns"><table class="min-w-[2320px] text-left text-sm">
+            <div class="overflow-x-auto" aria-label="Match results table; scroll horizontally to view all columns"><table class="min-w-[2460px] text-left text-sm">
                 <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400"><tr class="border-b border-gray-100 dark:border-gray-700">
-                    <th class="px-3 py-2.5"><input type="checkbox" checked="@AllPageEligibleSelected" @onchange="TogglePageSelection" aria-label="Select visible rows" /></th><th class="px-5 py-2.5 font-semibold">Result</th><th class="px-5 py-2.5 font-semibold">Reference</th><th class="px-5 py-2.5 font-semibold"><button type="button" @onclick='() => SetMatchSort("date")' class="inline-flex items-center gap-1 hover:text-primary-700 dark:hover:text-primary-300">Transaction date / time <span aria-hidden="true">@SortIndicator("date")</span></button></th>
-                    <th class="px-5 py-2.5 font-semibold">Processor account</th><th class="px-5 py-2.5 font-semibold">Card type</th><th class="px-5 py-2.5 font-semibold">Merchant</th><th class="px-5 py-2.5 font-semibold">Processor description</th><th class="px-5 py-2.5 font-semibold">GL account</th><th class="px-5 py-2.5 font-semibold">GL description</th>
+                    <th class="px-3 py-2.5"><input type="checkbox" checked="@AllPageEligibleSelected" @onchange="TogglePageSelection" aria-label="Select visible rows" /></th><th class="px-5 py-2.5 font-semibold">Result</th><th class="px-5 py-2.5 font-semibold">Reference</th><th class="px-5 py-2.5 font-semibold">Microfilm</th><th class="px-5 py-2.5 font-semibold">TRAN_PARTICULAR_2</th><th class="px-5 py-2.5 font-semibold"><button type="button" @onclick='() => SetMatchSort("date")' class="inline-flex items-center gap-1 hover:text-primary-700 dark:hover:text-primary-300">Transaction date / time <span aria-hidden="true">@SortIndicator("date")</span></button></th>
+                    <th class="px-5 py-2.5 font-semibold">Processor account</th><th class="px-5 py-2.5 font-semibold">Card type</th><th class="px-5 py-2.5 font-semibold">Merchant</th><th class="px-5 py-2.5 font-semibold">Processor description</th><th class="px-5 py-2.5 font-semibold">GL account</th><th class="px-5 py-2.5 font-semibold">GL reference</th>
                     <th class="px-5 py-2.5 text-right font-semibold">Txn amount</th><th class="px-5 py-2.5 font-semibold">Txn ccy</th>
                     <th class="px-5 py-2.5 text-right font-semibold">Billing amount</th><th class="px-5 py-2.5 font-semibold">Billing ccy</th>
                     <th class="px-5 py-2.5 text-right font-semibold">Settlement amount</th><th class="px-5 py-2.5 font-semibold">Settlement ccy</th>
                     <th class="px-5 py-2.5 text-right font-semibold">Recon amount</th><th class="px-5 py-2.5 font-semibold">Recon ccy</th>
                     <th class="px-5 py-2.5 font-semibold"><button type="button" @onclick='() => SetMatchSort("gl_date")' class="inline-flex items-center gap-1 hover:text-primary-700 dark:hover:text-primary-300">GL transaction date <span aria-hidden="true">@SortIndicator("gl_date")</span></button></th><th class="px-5 py-2.5 font-semibold"><button type="button" @onclick='() => SetMatchSort("gl_posting")' class="inline-flex items-center gap-1 hover:text-primary-700 dark:hover:text-primary-300">GL posting date / time <span aria-hidden="true">@SortIndicator("gl_posting")</span></button></th><th class="px-5 py-2.5 text-right font-semibold">GL amount</th><th class="px-5 py-2.5 font-semibold">GL ccy</th><th class="px-5 py-2.5 text-right font-semibold">Difference</th><th class="px-5 py-2.5 font-semibold">Match comment</th><th class="px-5 py-2.5 text-right font-semibold"><button type="button" @onclick='() => SetMatchSort("confidence")' class="ml-auto inline-flex items-center gap-1 hover:text-primary-700 dark:hover:text-primary-300">Confidence <span aria-hidden="true">@SortIndicator("confidence")</span></button></th><th class="sticky right-0 z-10 bg-white px-5 py-2.5 text-right font-semibold dark:bg-gray-800">Actions</th>
                 </tr><tr class="border-b border-gray-100 normal-case dark:border-gray-700">
-                    <th class="px-2 py-2"></th><th class="px-2 py-2"><select value="@_matchFilter" @onchange="SetMatchFilterFromSelect" aria-label="Filter result column" class="w-36 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white">@foreach (var option in MatchResultOptions) { <option value="@option.Value">@option.Label</option> }</select></th><th class="px-2 py-2"><input @bind="_matchReferenceFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" class="w-24 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><input type="date" @bind="_matchProcessorDateFilter" @bind:after="ReloadMatches" aria-label="Filter transaction date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th>
+                    <th class="px-2 py-2"></th><th class="px-2 py-2"><select value="@_matchFilter" @onchange="SetMatchFilterFromSelect" aria-label="Filter result column" class="w-36 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white">@foreach (var option in MatchResultOptions) { <option value="@option.Value">@option.Label</option> }</select></th><th class="px-2 py-2"><input @bind="_matchReferenceFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" class="w-24 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><input @bind="_matchMicrofilmFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" aria-label="Filter Microfilm" class="w-28 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><input @bind="_matchGlParticular2Filter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" aria-label="Filter TRAN_PARTICULAR_2" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><input type="date" @bind="_matchProcessorDateFilter" @bind:after="ReloadMatches" aria-label="Filter transaction date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th>
                     <th class="px-2 py-2"><input @bind="_matchProcessorAccountFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" class="w-24 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><select @bind="_matchCardTypeFilter" @bind:after="ReloadMatches" class="w-24 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="">All</option><option value="DC">DC</option><option value="CR">CR</option><option value="blank">Blank</option></select></th><th class="px-2 py-2"><input @bind="_matchMerchantFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Merchant" class="w-28 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"><select @bind="_matchProcessorDescriptionFilter" @bind:after="ReloadMatches" class="w-40 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white"><option value="">All</option><option value="blank">Blank</option>@foreach (var description in _processorDescriptionOptions) { <option value="@description">@description</option> }</select></th><th class="px-2 py-2"><input @bind="_matchGlAccountFilter" @bind:event="oninput" @bind:after="ReloadMatches" placeholder="Filter" class="w-24 rounded border border-gray-300 px-1.5 py-1 text-xs" /></th><th class="px-2 py-2"></th>
                     <th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchTxnCcyFilter" ValueChanged="SetMatchTxnCcy" Currencies="@CurrencyOptions()" /></th>
                     <th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchBillingCcyFilter" ValueChanged="SetMatchBillingCcy" Currencies="@CurrencyOptions()" /></th>
                     <th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchSettlementCcyFilter" ValueChanged="SetMatchSettlementCcy" Currencies="@CurrencyOptions()" /></th>
                     <th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchReconCcyFilter" ValueChanged="SetMatchReconCcy" Currencies="@CurrencyOptions()" /></th>
-                    <th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"><input type="date" @bind="_matchGlDateFilter" @bind:after="ReloadMatches" aria-label="Filter GL transaction date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th><th class="px-2 py-2"><input type="date" @bind="_matchGlPostingDateFilter" @bind:after="ReloadMatches" aria-label="Filter GL posting date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th><th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchGlCcyFilter" ValueChanged="SetMatchGlCcy" Currencies="@CurrencyOptions()" /></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th>
+                    <th class="px-2 py-2"><input type="date" @bind="_matchGlDateFilter" @bind:after="ReloadMatches" aria-label="Filter GL transaction date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th><th class="px-2 py-2"><input type="date" @bind="_matchGlPostingDateFilter" @bind:after="ReloadMatches" aria-label="Filter GL posting date" class="w-32 rounded border border-gray-300 px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></th><th class="px-2 py-2"></th><th class="px-2 py-2"><CurrencyFilter Value="@_matchGlCcyFilter" ValueChanged="SetMatchGlCcy" Currencies="@CurrencyOptions()" /></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th><th class="px-2 py-2"></th>
                 </tr></thead>
                 <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                     @foreach (var m in _matches)
                     {
-                        <tr @key="m.ReconMatchId"><td class="px-3 py-2.5"><input type="checkbox" disabled="@(!CanManuallyMatch(m))" checked="@_selectedMatchIds.Contains(m.ReconMatchId)" @onchange="() => ToggleMatchSelection(m.ReconMatchId)" /></td><td class="px-5 py-2.5"><StatusBadge Text="@Humanize(m.MatchStatus)" Color="@(m.MatchStatus == MatchStatus.Matched ? "green" : TypeColor(m.MatchStatus))" /></td><td class="px-5 py-2.5 font-mono text-xs">@m.ReferenceNumber</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.ProcessorTransactionDateTime, m.ProcessorDate)</td><td class="px-5 py-2.5 font-mono text-xs">@m.ProcessorAccountNumber</td><td class="px-5 py-2.5">@ProductTypeText(m.ProcessorProductType)</td><td class="max-w-40 truncate px-5 py-2.5 text-xs" title="@m.ProcessorMerchant">@m.ProcessorMerchant</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.ProcessorDescription">@m.ProcessorDescription</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlAccountNumber</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.GlDescription">@m.GlDescription</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ProcessorAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.ProcessorCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.BillingAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.BillingCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.SettlementAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.SettlementCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ReconciliationAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.Ccy)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateOnlyText(m.GlDate)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.GlPostingDateTime, null)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.GlAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.GlCcy ?? 480)</td><td class="px-5 py-2.5 text-right tabular-nums">@Difference(m)?.ToString("N2")</td><td class="max-w-48 truncate px-5 py-2.5 text-xs" title="@m.MatchComment">@m.MatchComment</td><td class="px-5 py-2.5 text-right tabular-nums">@m.Confidence.ToString("0.0")%</td><td class="sticky right-0 z-10 whitespace-nowrap bg-white px-5 py-2.5 text-right dark:bg-gray-800"><button type="button" @onclick="() => OpenMatchEvidence(m)" class="mr-1 rounded-lg border border-primary-200 px-2.5 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50">Evidence</button>@if (CanManuallyMatch(m)) { <button type="button" @onclick="() => OpenSingleMatchDrawer(m.ReconMatchId)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Match</button> }</td></tr>
+                        <tr @key="m.ReconMatchId"><td class="px-3 py-2.5"><input type="checkbox" disabled="@(!CanManuallyMatch(m))" checked="@_selectedMatchIds.Contains(m.ReconMatchId)" @onchange="() => ToggleMatchSelection(m.ReconMatchId)" /></td><td class="px-5 py-2.5"><StatusBadge Text="@ResultLabel(m)" Color="@ResultColor(m)" /></td><td class="px-5 py-2.5 font-mono text-xs">@m.ReferenceNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.MicrofilmRefNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlParticular2</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.ProcessorTransactionDateTime, m.ProcessorDate)</td><td class="px-5 py-2.5 font-mono text-xs">@m.ProcessorAccountNumber</td><td class="px-5 py-2.5">@ProductTypeText(m.ProcessorProductType)</td><td class="max-w-40 truncate px-5 py-2.5 text-xs" title="@m.ProcessorMerchant">@m.ProcessorMerchant</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.ProcessorDescription">@m.ProcessorDescription</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlAccountNumber</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.GlDescription">@m.GlDescription</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ProcessorAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.ProcessorCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.BillingAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.BillingCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.SettlementAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.SettlementCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ReconciliationAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.Ccy)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateOnlyText(m.GlDate)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.GlPostingDateTime, null)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.GlAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.GlCcy ?? 480)</td><td class="px-5 py-2.5 text-right tabular-nums">@Difference(m)?.ToString("N2")</td><td class="max-w-48 truncate px-5 py-2.5 text-xs" title="@m.MatchComment">@m.MatchComment</td><td class="px-5 py-2.5 text-right tabular-nums">@m.Confidence.ToString("0.0")%</td><td class="sticky right-0 z-10 whitespace-nowrap bg-white px-5 py-2.5 text-right dark:bg-gray-800"><button type="button" @onclick="() => OpenMatchEvidence(m)" class="mr-1 rounded-lg border border-primary-200 px-2.5 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50">Evidence</button>@if (CanAddManualGl(m)) { <button type="button" @onclick="() => OpenManualGlDrawer(m)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Add GL &amp; match</button> } else if (CanManuallyMatch(m)) { <button type="button" @onclick="() => OpenSingleMatchDrawer(m.ReconMatchId)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Match</button> }</td></tr>
                     }
                     @if (_matches.Count == 0) { <tr><td colspan="26" class="px-5 py-10 text-center text-gray-500">No results match the filter.</td></tr> }
                 </tbody>
@@ -389,6 +402,23 @@ else
         </div>
     }
 
+    @if (_showManualGlDrawer)
+    {
+        <div class="fixed inset-0 z-50 bg-black/40" @onclick="CloseManualGlDrawer">
+            <aside class="ml-auto flex h-full w-full max-w-lg flex-col bg-white shadow-2xl dark:bg-gray-800" @onclick:stopPropagation="true">
+                <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700"><div><h3 class="font-semibold text-gray-900 dark:text-white">Add GL details and match</h3><p class="mt-0.5 text-xs text-gray-500">This manual resolution is recorded in the exception notes and audit report.</p></div><button type="button" @onclick="CloseManualGlDrawer" class="rounded-lg p-1 text-gray-400 hover:bg-gray-100"><CloseIcon Class="h-5 w-5" /></button></div>
+                <div class="flex-1 space-y-4 overflow-y-auto p-5">
+                    <div class="rounded-lg bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-700/50 dark:text-gray-300">Processor reference: <span class="font-mono font-semibold">@_manualGlReferenceNumber</span></div>
+                    <div class="grid gap-3 sm:grid-cols-2"><div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL account *</label><input @bind="_manualGlAccount" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></div><div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL reference *</label><input @bind="_manualGlReference" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></div><div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL date *</label><input type="date" @bind="_manualGlDate" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></div><div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL amount *</label><input type="number" step="0.01" @bind="_manualGlAmount" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></div><div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL currency *</label><select @bind="_manualGlCcy" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white">@foreach (var ccy in CurrencyOptions()) { <option value="@ccy">@CcyName(ccy)</option> }</select></div></div>
+                    <div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">GL narrative</label><input @bind="_manualGlDescription" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" /></div>
+                    <div><label class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">Reason for manual match *</label><textarea @bind="_manualGlComment" rows="4" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea></div>
+                    @if (!string.IsNullOrWhiteSpace(_manualGlError)) { <p class="text-sm text-red-600">@_manualGlError</p> }
+                </div>
+                <div class="flex justify-end gap-2 border-t border-gray-200 px-5 py-4 dark:border-gray-700"><button type="button" @onclick="CloseManualGlDrawer" class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200">Cancel</button><button type="button" @onclick="SaveManualGlMatch" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Save GL and match</button></div>
+            </aside>
+        </div>
+    }
+
     @if (_selected is not null)
     {
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @onclick="CloseModal">
@@ -461,7 +491,7 @@ else
 @code {
     [Parameter] public int RunId { get; set; }
 
-    private enum Tab { Transactions, Gl, GlBulk, Reconciliation, NetworkValidation, NetworkTransactions }
+    private enum Tab { Transactions, OnUsAtmTransactions, Gl, GlBulk, Reconciliation, NetworkValidation, NetworkTransactions }
     private Tab _tab = Tab.Reconciliation;
     private string _networkSearchFilter = "";
 
@@ -475,7 +505,7 @@ else
     private string _matchFilter = "all";
     private string _matchSort = "date";
     private bool _matchSortDescending = true;
-    private string _matchReferenceFilter = "", _matchProcessorAccountFilter = "", _matchGlAccountFilter = "";
+    private string _matchReferenceFilter = "", _matchMicrofilmFilter = "", _matchGlParticular2Filter = "", _matchProcessorAccountFilter = "", _matchGlAccountFilter = "";
     private string _matchSearchFilter = "", _matchCardTypeFilter = "", _matchMerchantFilter = "", _matchProcessorDescriptionFilter = "";
     private string _matchTxnCcyFilter = "", _matchBillingCcyFilter = "", _matchSettlementCcyFilter = "", _matchReconCcyFilter = "", _matchGlCcyFilter = "";
     private DateOnly? _matchProcessorDateFilter, _matchGlDateFilter, _matchGlPostingDateFilter;
@@ -486,6 +516,12 @@ else
     private readonly HashSet<int> _selectedMatchIds = [];
     private bool _showMatchDrawer, _showDuplicateDrawer, _showGlOnlyDrawer;
     private string _manualMatchComment = "", _manualMatchError = "";
+    private bool _showManualGlDrawer;
+    private int? _manualGlMatchId;
+    private string _manualGlReferenceNumber = "", _manualGlAccount = "", _manualGlReference = "", _manualGlDescription = "", _manualGlComment = "", _manualGlError = "";
+    private DateOnly _manualGlDate = DateOnly.FromDateTime(DateTime.Today);
+    private decimal? _manualGlAmount;
+    private int _manualGlCcy = 480;
     private List<int> _matchCurrencies = new();
     private int _exceptionTotal;
     private List<AtmNetworkValidation> _networkValidations = new();
@@ -520,6 +556,7 @@ else
     private record GlOnlyDetail(string? Reference, string? GlAccount, DateOnly? Date, decimal? Amount, int? Ccy, string Narrative, bool IsSettlementPosting);
     private List<GlOnlyDetail> _glOnlyDetails = new();
     private int _glOnlyTransactionCount, _glOnlySettlementPostingCount;
+    private int _processorExceptionCount, _glOnlyExceptionCount;
     private decimal _glOnlyTransactionAmount, _glOnlySettlementPostingAmount;
     private string _glOnlyTab = "transaction";
     private const int GlOnlyDetailCap = 500;
@@ -531,7 +568,7 @@ else
     private record Cell(string Text, bool Right = false, bool Mono = false);
     private record DataRow(int Key, List<Cell> Cells);
     private List<DataRow> _dataRows = new();
-    private int _trxTotal, _glTotal, _glBulkTotal, _networkTrxTotal, _page;
+    private int _trxTotal, _onUsAtmTotal, _glTotal, _glBulkTotal, _networkTrxTotal, _page;
     private const int PageSize = 100;
     private List<string> _cardholderAccts = new();
     private List<int> _transactionCurrencies = new();
@@ -539,16 +576,19 @@ else
     private readonly Dictionary<string, string> _dataFilterModes = new(StringComparer.Ordinal);
     private List<int> _glCurrencies = new();
     private Dictionary<string, int> _glAccountCurrencies = new();
-    private string _accountLeg = "debit";
     private bool _submitting;
+    private bool _archiving;
     private bool _canVerify;
+    private bool _canArchive, _canFreeze, _canManualGlMatch;
     private string? _verificationError;
-    private List<string> _debitAccounts = new(), _creditAccounts = new();
+    private string? _archiveError;
+    private List<string> _debitAccounts = new();
 
     private static readonly (string Value, string Label)[] MatchResultOptions =
     [
         ("all", "All results"),
         ("matched", "Matched"),
+        ("matched_tolerance", "Matched with tolerance"),
         ("exception", "All exceptions"),
         ("amount_mismatch", "Amount mismatch"),
         ("no_gl_match", "No GL match"),
@@ -601,7 +641,7 @@ else
     private (string Label, bool Right)[] ActiveDataHeaders => _tab switch
     {
         Tab.NetworkTransactions => NetworkTrxHeaders,
-        Tab.Transactions when _run?.Function == ReconFunction.InterchangeToGl => InterchangeTrxHeaders,
+        Tab.Transactions or Tab.OnUsAtmTransactions when _run?.Function == ReconFunction.InterchangeToGl => InterchangeTrxHeaders,
         Tab.Transactions => DebitTrxHeaders,
         Tab.GlBulk => GlBulkHeaders,
         _ => GlHeaders
@@ -630,13 +670,24 @@ else
         && (column != "Transaction currency" || _tab == Tab.Transactions || _tab == Tab.NetworkTransactions);
     private static bool CanFilterBlank(string column) => column != "Channel";
 
-    private int DataTotal => _tab == Tab.Transactions ? _trxTotal : _tab == Tab.GlBulk ? _glBulkTotal : _glTotal;
+    private int DataTotal => _tab switch
+    {
+        Tab.Transactions => _trxTotal,
+        Tab.OnUsAtmTransactions => _onUsAtmTotal,
+        Tab.GlBulk => _glBulkTotal,
+        Tab.NetworkTransactions => _networkTrxTotal,
+        _ => _glTotal
+    };
     private int PageCount => Math.Max(1, (DataTotal + PageSize - 1) / PageSize);
     private int MatchPageCount => Math.Max(1, (_matchTotal + MatchPageSize - 1) / MatchPageSize);
     private int NetworkValidationPageCount => Math.Max(1, (_networkValidationTotal + NetworkValidationPageSize - 1) / NetworkValidationPageSize);
 
     protected override async Task OnParametersSetAsync()
     {
+        var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
+        _canArchive = grants.TryGetValue("ARCHIVE_BATCH", out var archiveGrant) && archiveGrant.CanEdit;
+        _canFreeze = grants.TryGetValue("FREEZE_PERIOD", out var freezeGrant) && freezeGrant.CanEdit;
+        _canManualGlMatch = grants.TryGetValue("MANUAL_GL_MATCH", out var manualGlGrant) && manualGlGrant.CanEdit;
         await using var db = await DbFactory.CreateDbContextAsync();
         _run = await db.ReconRuns.FirstOrDefaultAsync(r => r.ReconRunId == RunId);
         if (_run is null) return;
@@ -648,6 +699,8 @@ else
         await LoadMonthlySummariesAsync(db);
         _exceptionCurrencies = await db.ReconExceptions.Where(e => e.ReconRunId == RunId && e.Ccy != null)
             .Select(e => e.Ccy!.Value).Distinct().OrderBy(x => x).ToListAsync();
+        _processorExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType != MatchStatus.UnmatchedGl);
+        _glOnlyExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType == MatchStatus.UnmatchedGl);
 
         var accountMap = await db.GlSettlementAccounts.Where(a => a.IsActive)
             .Select(a => new { a.AcctNum, a.Ccy, a.Role }).ToListAsync();
@@ -655,7 +708,6 @@ else
         _glAccountCurrencies = accountMap.ToDictionary(a => a.AcctNum, a => a.Ccy);
         _glCurrencies = accountMap.Select(a => a.Ccy).Distinct().OrderBy(x => x).ToList();
         _debitAccounts = accountMap.Where(a => a.Role == GlAccountRole.CardholderSettlement).Select(a => a.AcctNum).ToList();
-        _creditAccounts = accountMap.Where(a => a.Role == GlAccountRole.IntermediarySettlement).Select(a => a.AcctNum).ToList();
 
         _transactionCurrencies = _run.Function == ReconFunction.InterchangeToGl
             ? await db.StgInterchangeFees.Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.TxnCcy != null)
@@ -677,6 +729,7 @@ else
             .ToListAsync();
 
         _trxTotal = await TrxQuery(db).CountAsync();
+        _onUsAtmTotal = _run.Function == ReconFunction.InterchangeToGl ? await OnUsAtmQuery(db).CountAsync() : 0;
         if (_run.NetworkBatchId is not null)
         {
             _networkTrxTotal = await NetworkTrxQuery(db).CountAsync();
@@ -697,10 +750,10 @@ else
 
         if (_run.Function == ReconFunction.InterchangeToGl)
         {
-            var interchangeRows = await db.StgInterchangeFees.CountAsync(x => x.ImportBatchId == _run.ProcessorBatchId);
+            var interchangeRows = await db.StgInterchangeFees.CountAsync(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0"));
             var glRows = await db.StgGlEntries.CountAsync(x => x.ImportBatchId == _run.GlBatchId);
             var interchangeDuplicates = await db.StgInterchangeFees
-                .Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.ReferenceNumber != null && x.ReferenceNumber != "")
+                .Where(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0") && x.ReferenceNumber != null && x.ReferenceNumber != "")
                 .GroupBy(x => x.ReferenceNumber!).Where(g => g.Count() > 1)
                 .Select(g => new { Reference = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).ThenBy(x => x.Reference).ToListAsync();
             var glDuplicates = await db.StgGlEntries
@@ -743,7 +796,10 @@ else
         ApplyTransactionFilters(db.StgDebitSettlements.Where(x => x.ImportBatchId == _run!.ProcessorBatchId));
 
     private IQueryable<StgInterchangeFee> InterchangeQuery(Recon.Web.Data.AppDbContext db) =>
-        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => x.ImportBatchId == _run!.ProcessorBatchId));
+        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => x.ImportBatchId == _run!.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0")));
+
+    private IQueryable<StgInterchangeFee> OnUsAtmQuery(Recon.Web.Data.AppDbContext db) =>
+        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => x.ImportBatchId == _run!.ProcessorBatchId && x.OrigineCode != null && x.OrigineCode.Trim() == "0"));
 
     private IQueryable<StgDebitSettlement> ApplyTransactionFilters(IQueryable<StgDebitSettlement> q)
     {
@@ -793,8 +849,7 @@ else
     private IQueryable<StgGlEntry> GlQuery(Recon.Web.Data.AppDbContext db)
     {
         var q = db.StgGlEntries.Where(x => x.ImportBatchId == _run!.GlBatchId && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
-        var legAccounts = _accountLeg == "credit" ? _creditAccounts : _debitAccounts;
-        q = q.Where(x => x.AcctNum != null && legAccounts.Contains(x.AcctNum));
+        q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
         if (int.TryParse(DataFilterValue("Source row"), out var sourceRow)) q = q.Where(x => x.SourceRowNumber == sourceRow);
         q = ApplyTextFilter(q, "SOL ID", x => x.SolId);
         q = ApplyTextFilter(q, "Account number", x => x.AcctNum);
@@ -811,7 +866,6 @@ else
         q = ApplyTextFilter(q, "Entry user", x => x.EntryUserId);
         q = ApplyTextFilter(q, "Verified user", x => x.VfdUserId);
         // Channel scope by TRAN_PARTICULAR prefix.
-        if (_accountLeg == "credit") return q;
         return _run!.Function switch
         {
             ReconFunction.AtmToGl => q.Where(x => x.TranParticular != null && x.TranParticular.StartsWith("CASH")),
@@ -823,8 +877,7 @@ else
     private IQueryable<StgGlBulkPosting> GlBulkQuery(Recon.Web.Data.AppDbContext db)
     {
         var q = db.StgGlBulkPostings.Where(x => x.ImportBatchId == _run!.GlBatchId && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
-        var legAccounts = _accountLeg == "credit" ? _creditAccounts : _debitAccounts;
-        q = q.Where(x => x.AcctNum != null && legAccounts.Contains(x.AcctNum));
+        q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
         if (int.TryParse(DataFilterValue("Source row"), out var sourceRow)) q = q.Where(x => x.SourceRowNumber == sourceRow);
         q = ApplyTextFilter(q, "Account", x => x.AcctNum);
         var referenceMode = DataFilterMode("Reference");
@@ -867,11 +920,11 @@ else
                 new(x.InterchangeFee?.ToString("N2") ?? "", Right: true),
             })).ToList();
         }
-        else if (_tab == Tab.Transactions)
+        else if (_tab is Tab.Transactions or Tab.OnUsAtmTransactions)
         {
             if (_run.Function == ReconFunction.InterchangeToGl)
             {
-                var rows = await InterchangeQuery(db).OrderBy(x => x.StgInterchangeFeeId)
+                var rows = await (_tab == Tab.OnUsAtmTransactions ? OnUsAtmQuery(db) : InterchangeQuery(db)).OrderBy(x => x.StgInterchangeFeeId)
                     .Skip(_page * PageSize).Take(PageSize).ToListAsync();
                 _dataRows = rows.Select(x => new DataRow(x.StgInterchangeFeeId, new()
                 {
@@ -1005,6 +1058,7 @@ else
         _page = 0;
         await using var db = await DbFactory.CreateDbContextAsync();
         _trxTotal = await TrxQuery(db).CountAsync();
+        _onUsAtmTotal = _run?.Function == ReconFunction.InterchangeToGl ? await OnUsAtmQuery(db).CountAsync() : 0;
         if (_run?.NetworkBatchId is not null)
         {
             _networkTrxTotal = await NetworkTrxQuery(db).CountAsync();
@@ -1019,13 +1073,6 @@ else
 
     private async Task ClearDataFilters()
     {
-        _dataFilters.Clear();
-        await ApplyDataFilters();
-    }
-
-    private async Task SetAccountLeg(string leg)
-    {
-        _accountLeg = leg;
         _dataFilters.Clear();
         await ApplyDataFilters();
     }
@@ -1095,6 +1142,8 @@ else
             (m.ReferenceNumber != null && m.ReferenceNumber.Contains(_matchSearchFilter)) ||
             (m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(_matchSearchFilter)));
         if (!string.IsNullOrWhiteSpace(_matchReferenceFilter)) q = q.Where(m => m.ReferenceNumber != null && m.ReferenceNumber.Contains(_matchReferenceFilter));
+        if (!string.IsNullOrWhiteSpace(_matchMicrofilmFilter)) q = q.Where(m => m.MicrofilmRefNumber != null && m.MicrofilmRefNumber.Contains(_matchMicrofilmFilter));
+        if (!string.IsNullOrWhiteSpace(_matchGlParticular2Filter)) q = q.Where(m => m.GlParticular2 != null && m.GlParticular2.Contains(_matchGlParticular2Filter));
         if (!string.IsNullOrWhiteSpace(_matchProcessorAccountFilter)) q = q.Where(m => m.ProcessorAccountNumber != null && m.ProcessorAccountNumber.Contains(_matchProcessorAccountFilter));
         if (_matchCardTypeFilter == "blank") q = q.Where(m => m.ProcessorProductType == null || m.ProcessorProductType == "");
         else if (!string.IsNullOrWhiteSpace(_matchCardTypeFilter)) q = q.Where(m => m.ProcessorProductType != null && m.ProcessorProductType == _matchCardTypeFilter);
@@ -1134,6 +1183,8 @@ else
             "gl_date" => q.OrderBy(m => m.GlDate).ThenBy(m => m.GlPostingDateTime).ThenBy(m => m.ReconMatchId),
             "gl_posting" when _matchSortDescending => q.OrderByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.GlDate).ThenByDescending(m => m.ReconMatchId),
             "gl_posting" => q.OrderBy(m => m.GlPostingDateTime).ThenBy(m => m.GlDate).ThenBy(m => m.ReconMatchId),
+            "difference" when _matchSortDescending => q.OrderByDescending(m => m.ReconciliationAmount != null && m.GlAmount != null ? Math.Abs(m.ReconciliationAmount.Value - m.GlAmount.Value) : -1m).ThenByDescending(m => m.ReconMatchId),
+            "difference" => q.OrderBy(m => m.ReconciliationAmount != null && m.GlAmount != null ? Math.Abs(m.ReconciliationAmount.Value - m.GlAmount.Value) : decimal.MaxValue).ThenBy(m => m.ReconMatchId),
             "confidence" when _matchSortDescending => q.OrderByDescending(m => m.Confidence).ThenByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ReconMatchId),
             "confidence" => q.OrderBy(m => m.Confidence).ThenBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ReconMatchId),
             _ => q.OrderByDescending(m => m.ReconMatchId)
@@ -1169,6 +1220,7 @@ else
         filter switch
         {
             "matched" => query.Where(m => m.MatchStatus == MatchStatus.Matched),
+            "matched_tolerance" => query.Where(m => m.MatchStatus == MatchStatus.Matched && m.MatchComment != null && m.MatchComment.StartsWith("Tolerance applied:")),
             "exception" => query.Where(m => m.MatchStatus != MatchStatus.Matched),
             "amount_mismatch" => query.Where(m => m.MatchStatus == MatchStatus.AmountMismatch),
             "no_gl_match" => query.Where(m => m.MatchStatus == MatchStatus.UnmatchedProcessor),
@@ -1335,6 +1387,7 @@ else
             "confidence" => "confidence",
             "gl_date" => "gl_date",
             "gl_posting" => "gl_posting",
+            "difference" => "difference",
             _ => "date"
         };
         _matchSortDescending = true;
@@ -1372,6 +1425,7 @@ else
     // A reviewer can accept any non-matched row that has a linked GL entry. Amounts may be
     // missing for some source records; the manual decision and its reason are still valid.
     private static bool CanManuallyMatch(ReconMatch match) => match.MatchStatus != MatchStatus.Matched && match.GlStagingId is not null;
+    private bool CanAddManualGl(ReconMatch match) => _canManualGlMatch && match.MatchStatus == MatchStatus.UnmatchedProcessor && match.GlStagingId is null;
     private bool AllPageEligibleSelected
     {
         get { var ids = _matches.Where(CanManuallyMatch).Select(m => m.ReconMatchId).ToList(); return ids.Count > 0 && ids.All(_selectedMatchIds.Contains); }
@@ -1385,6 +1439,91 @@ else
     }
     private void OpenBulkMatchDrawer() { _manualMatchComment = ""; _manualMatchError = ""; _showMatchDrawer = _selectedMatchIds.Count > 0; }
     private void OpenSingleMatchDrawer(int id) { _selectedMatchIds.Clear(); _selectedMatchIds.Add(id); OpenBulkMatchDrawer(); }
+
+    private void OpenManualGlDrawer(ReconMatch match)
+    {
+        _manualGlMatchId = match.ReconMatchId;
+        _manualGlReferenceNumber = match.ReferenceNumber ?? match.MicrofilmRefNumber ?? "—";
+        _manualGlAccount = "";
+        _manualGlReference = match.ReferenceNumber ?? match.MicrofilmRefNumber ?? "";
+        _manualGlDescription = "";
+        _manualGlComment = "";
+        _manualGlError = "";
+        _manualGlDate = match.ProcessorDate ?? DateOnly.FromDateTime(DateTime.Today);
+        _manualGlAmount = match.ReconciliationAmount ?? match.ProcessorAmount;
+        _manualGlCcy = match.Ccy ?? match.ProcessorCcy ?? 480;
+        _showManualGlDrawer = true;
+    }
+
+    private void CloseManualGlDrawer()
+    {
+        _showManualGlDrawer = false;
+        _manualGlMatchId = null;
+        _manualGlError = "";
+    }
+
+    private async Task SaveManualGlMatch()
+    {
+        var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
+        if (!grants.TryGetValue("MANUAL_GL_MATCH", out var grant) || !grant.CanEdit)
+        {
+            _manualGlError = "You do not have permission to create a manual GL match.";
+            return;
+        }
+        if (_manualGlMatchId is null || string.IsNullOrWhiteSpace(_manualGlAccount) || string.IsNullOrWhiteSpace(_manualGlReference) || _manualGlAmount is null || string.IsNullOrWhiteSpace(_manualGlComment))
+        {
+            _manualGlError = "GL account, reference, amount, and a reason are required.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var match = await db.ReconMatches.SingleOrDefaultAsync(m => m.ReconMatchId == _manualGlMatchId && m.ReconRunId == RunId);
+        if (match is null || !CanAddManualGl(match))
+        {
+            _manualGlError = "This row is no longer eligible for a manual GL match.";
+            return;
+        }
+
+        var exception = await db.ReconExceptions.Where(e => e.ReconRunId == RunId && e.ExceptionType == MatchStatus.UnmatchedProcessor && e.Status != ExceptionStatus.Resolved && e.ReferenceNumber == match.ReferenceNumber && e.SettlementLeg == match.SettlementLeg).OrderByDescending(e => e.ReconExceptionId).FirstOrDefaultAsync();
+        if (exception is null)
+        {
+            _manualGlError = "The linked No GL Match exception could not be found, so this resolution cannot be audited.";
+            return;
+        }
+
+        var reason = _manualGlComment.Trim();
+        match.GlAccountNumber = _manualGlAccount.Trim();
+        match.GlReference = _manualGlReference.Trim();
+        match.GlParticular2 = _manualGlReference.Trim();
+        match.GlDescription = string.IsNullOrWhiteSpace(_manualGlDescription) ? null : _manualGlDescription.Trim();
+        match.GlAmount = Math.Round(_manualGlAmount.Value, 4);
+        match.GlCcy = _manualGlCcy;
+        match.GlDate = _manualGlDate;
+        match.MatchStatus = MatchStatus.Matched;
+        match.IsManuallyMatched = true;
+        match.ManuallyMatchedDate = DateTime.UtcNow;
+        match.MatchComment = reason;
+        match.ScoreBreakdown = "Manual GL match: " + reason;
+        match.Confidence = 100m;
+
+        exception.Status = ExceptionStatus.Resolved;
+        exception.ResolvedBy = CurrentUser.UserId;
+        exception.ResolvedDate = DateTime.UtcNow;
+        db.ReconExceptionComments.Add(new ReconExceptionComment { ReconExceptionId = exception.ReconExceptionId, Body = $"[Manual GL match] GL account {_manualGlAccount.Trim()}, reference {_manualGlReference.Trim()}, date {_manualGlDate:yyyy-MM-dd}, amount {_manualGlAmount.Value:N2} ({CcyName(_manualGlCcy)}). Reason: {reason}" });
+
+        await db.SaveChangesAsync();
+        await RebuildSummariesAsync(db);
+        var run = await db.ReconRuns.FindAsync(RunId);
+        if (run is not null)
+        {
+            run.MatchedCount = await db.ReconMatches.CountAsync(m => m.ReconRunId == RunId && m.MatchStatus == MatchStatus.Matched);
+            run.ExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.Status != ExceptionStatus.Resolved);
+            await db.SaveChangesAsync();
+        }
+        _run = run;
+        CloseManualGlDrawer();
+        await ReloadMatches();
+    }
 
     private async Task OpenDuplicateDrawer()
     {
@@ -1474,7 +1613,7 @@ else
     {
         var query = new Dictionary<string, string?>
         {
-            ["result"] = _matchFilter, ["reference"] = _matchReferenceFilter, ["processorAccount"] = _matchProcessorAccountFilter,
+            ["result"] = _matchFilter, ["reference"] = _matchReferenceFilter, ["microfilm"] = _matchMicrofilmFilter, ["glParticular2"] = _matchGlParticular2Filter, ["processorAccount"] = _matchProcessorAccountFilter,
             ["search"] = _matchSearchFilter, ["cardType"] = _matchCardTypeFilter, ["merchant"] = _matchMerchantFilter, ["processorDescription"] = _matchProcessorDescriptionFilter,
             ["glAccount"] = _matchGlAccountFilter, ["txnCcy"] = _matchTxnCcyFilter, ["billingCcy"] = _matchBillingCcyFilter,
             ["settlementCcy"] = _matchSettlementCcyFilter, ["reconCcy"] = _matchReconCcyFilter, ["otherReconCcy"] = _matchOtherReconCcy ? "true" : null, ["leg"] = _matchLegFilter, ["glCcy"] = _matchGlCcyFilter, ["maxDifference"] = _maxDifference,
@@ -1600,6 +1739,22 @@ else
         _ => "Not submitted"
     };
 
+    private async Task ArchiveBatch()
+    {
+        _archiveError = null; _archiving = true;
+        try { await ArchiveService.ArchiveRunAsync(RunId, false); Nav.NavigateTo("/batches"); }
+        catch (Exception ex) { _archiveError = ex.Message; }
+        finally { _archiving = false; }
+    }
+
+    private async Task FreezePeriod()
+    {
+        _archiveError = null; _archiving = true;
+        try { await ArchiveService.FreezeScopeAsync(RunId); Nav.NavigateTo("/batches"); }
+        catch (Exception ex) { _archiveError = ex.Message; }
+        finally { _archiving = false; }
+    }
+
     private async Task SubmitForVerification()
     {
         _verificationError = null;
@@ -1680,6 +1835,11 @@ else
         MatchStatus.Ambiguous => "Ambiguous",
         _ => s.ToString()
     };
+
+    private static bool IsToleranceMatch(ReconMatch match) => match.MatchStatus == MatchStatus.Matched
+        && match.MatchComment?.StartsWith("Tolerance applied:", StringComparison.Ordinal) == true;
+    private static string ResultLabel(ReconMatch match) => IsToleranceMatch(match) ? "Matched with tolerance" : Humanize(match.MatchStatus);
+    private static string ResultColor(ReconMatch match) => IsToleranceMatch(match) ? "green-soft" : match.MatchStatus == MatchStatus.Matched ? "green" : TypeColor(match.MatchStatus);
 
     private static string TypeColor(MatchStatus s) => s switch
     {

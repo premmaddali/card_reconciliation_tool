@@ -22,6 +22,11 @@ public static class DbSeeder
 
         await SeedGlAccountsAsync(db);
         await SeedCurrenciesAsync(db);
+        if (!await db.ReconParameters.AnyAsync())
+        {
+            db.ReconParameters.Add(new ReconParameters { AmountTolerance = 0m });
+            await db.SaveChangesAsync();
+        }
         await SeedSchemeProfilesAsync(db);
         await SeedIdentityAsync(db, userManager, logger);
         await SeedSchemeMenusAsync(db);
@@ -137,7 +142,7 @@ public static class DbSeeder
         // until real adapters are registered for that scheme.
         var seed = new (string Scheme, string Cms, string TxAdapter, bool Active)[]
         {
-            ("Mastercard", "BankOne",     "bankone-interchange", true),
+            ("Mastercard", "Core banking", "bankone-interchange", true),
             ("Visa",       "Placeholder", "placeholder",         true),
             ("UnionPay",   "Placeholder", "placeholder",         true),
             ("RuPay",      "Placeholder", "placeholder",         true),
@@ -156,9 +161,9 @@ public static class DbSeeder
                     Cms = cms,
                     TransactionAdapterCode = txAdapter,
                     GlcAdapterCode = scheme == "Mastercard" ? "bankone-gl-dump" : "placeholder",
-                    // Mastercard includes Network↔ATM (the T464 validation); placeholders get the three GL functions.
+                    // Mastercard ATM validation has no GL side.
                     Functions = scheme == "Mastercard"
-                        ? "AtmToGl;PosToGl;InterchangeToGl;NetworkToAtm"
+                        ? "PosToGl;InterchangeToGl;NetworkToAtm"
                         : "AtmToGl;PosToGl;InterchangeToGl",
                     IsActive = active,
                     CreatedBy = CurrentUserService.SystemUserId,
@@ -167,10 +172,12 @@ public static class DbSeeder
             }
             else
             {
-                if (string.IsNullOrEmpty(p.Functions) || p.Functions == "InterchangeToGl")
-                    p.Functions = scheme == "Mastercard"
-                        ? "AtmToGl;PosToGl;InterchangeToGl;NetworkToAtm" // backfill pre-Functions rows
-                        : "AtmToGl;PosToGl;InterchangeToGl";
+                // The seed represents a generic default deployment, not a particular bank.
+                p.Cms = cms;
+                if (scheme == "Mastercard")
+                    p.Functions = "PosToGl;InterchangeToGl;NetworkToAtm";
+                else if (string.IsNullOrEmpty(p.Functions) || p.Functions == "InterchangeToGl")
+                    p.Functions = "AtmToGl;PosToGl;InterchangeToGl";
                 p.IsActive = active;
             }
         }
@@ -195,10 +202,15 @@ public static class DbSeeder
             ("DATA",       "Data",             null,           null,       7, null),
             ("IMPORT",     "Import files",     "/import",      "DATA",     1, "import"),
             ("BATCHES",    "Import batches",   "/batches",     "DATA",     2, "list"),
-            ("ADMIN",      "Administration",   null,           null,       6, null),
+            ("ADMIN",      "Administration",   null,           null,       99, null),
             ("USERS",      "Users",            "/admin/users", "ADMIN",    1, "users"),
             ("ROLES",      "Roles & access",   "/admin/roles", "ADMIN",    2, "roles"),
             ("WORKFLOWS",  "Verification workflows", "/admin/workflows", "ADMIN", 3, "workflow"),
+            ("PARAMETERS", "Run parameters",   "/admin/parameters", "ADMIN", 4, "workflow"),
+            ("AUDITREPORTS", "Audit reports",   "/admin/audit-reports", "ADMIN", 5, "list"),
+            ("ARCHIVE_BATCH", "Archive batch",  null,           "ADMIN", 6, null),
+            ("FREEZE_PERIOD", "Freeze period",  null,           "ADMIN", 7, null),
+            ("MANUAL_GL_MATCH", "Manual GL match", null,         "ADMIN", 8, null),
         };
 
         foreach (var (code, name, route, parent, seq, icon) in pages)
@@ -268,6 +280,8 @@ public static class DbSeeder
             ("Recon Manager", "ANALYSIS",   true, false, false, false),
             ("Recon Manager", "IMPORT",     true, true,  false, false),
             ("Recon Manager", "BATCHES",    true, false, false, false),
+            ("Recon Manager", "ARCHIVE_BATCH", false, false, true, false),
+            ("Recon Manager", "FREEZE_PERIOD", false, false, true, false),
 
             ("Viewer",        "DASHBOARD",  true, false, false, false),
             ("Viewer",        "SCHEMES",    true, false, false, false),
@@ -290,6 +304,12 @@ public static class DbSeeder
         foreach (var page in routed)
             if (!await db.AppAccessMenus.AnyAsync(m => m.AppAccessId == admin.AppAccessId && m.PageId == page.AppPageId))
                 db.AppAccessMenus.Add(new AppAccessMenu { AppAccessId = admin.AppAccessId, PageId = page.AppPageId, CanView = true, CanAdd = true, CanEdit = true, CanDelete = true });
+        foreach (var pageCode in new[] { "ARCHIVE_BATCH", "FREEZE_PERIOD", "MANUAL_GL_MATCH" })
+        {
+            var page = await db.AppPages.SingleAsync(x => x.PageCode == pageCode);
+            if (!await db.AppAccessMenus.AnyAsync(m => m.AppAccessId == admin.AppAccessId && m.PageId == page.AppPageId))
+                db.AppAccessMenus.Add(new AppAccessMenu { AppAccessId = admin.AppAccessId, PageId = page.AppPageId, CanView = false, CanAdd = false, CanEdit = true, CanDelete = false });
+        }
         await db.SaveChangesAsync();
 
         // ---- Initial admin user ----

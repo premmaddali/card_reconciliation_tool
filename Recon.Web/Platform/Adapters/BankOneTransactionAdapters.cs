@@ -18,7 +18,7 @@ internal static class BankOne
 public sealed class BankOneDebitSettlementAdapter : ITransactionAdapter
 {
     public string Code => "bankone-debit-settlement";
-    public string DisplayName => "BankOne Debit Settlement (ATM/POS)";
+    public string DisplayName => "Card settlement workbook (ATM / POS)";
     public SourceType? LegacySourceType => null; // channel-specific SourceType set during detection
 
     /// <summary>The channel resolved from the file content (set by <see cref="DetectChannel"/>).</summary>
@@ -86,7 +86,7 @@ public sealed class BankOneDebitSettlementAdapter : ITransactionAdapter
 public sealed class BankOneInterchangeAdapter : ITransactionAdapter
 {
     public string Code => "bankone-interchange";
-    public string DisplayName => "BankOne Interchange Fees";
+    public string DisplayName => "Interchange fees workbook";
     public SourceType? LegacySourceType => SourceType.InterchangeFee;
 
     public bool CanDetect(HeaderMap headers) =>
@@ -140,7 +140,7 @@ public sealed class BankOneInterchangeAdapter : ITransactionAdapter
 public sealed class BankOneNetworkT464Adapter : ITransactionAdapter
 {
     public string Code => "bankone-network-t464";
-    public string DisplayName => "BankOne T464 Network Settlement";
+    public string DisplayName => "Network settlement workbook (T464)";
     public SourceType? LegacySourceType => SourceType.NetworkT464;
 
     public bool CanDetect(HeaderMap headers) =>

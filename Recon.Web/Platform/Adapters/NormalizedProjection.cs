@@ -131,8 +131,10 @@ public static class NormalizedProjection
                 SourceRowNumber = x.SourceRowNumber,
                 SourceTable = nameof(StgInterchangeFee),
                 SourceStagingId = x.StgInterchangeFeeId,
+                // Keep debit and credit keys distinct; the engine selects the key by product type.
                 Reference = x.ReferenceNumber?.Trim(),
-                TraceNumber = x.MicrofilmRefNumber,
+                ExternalReference = x.ReferenceNumber?.Trim(),
+                TraceNumber = x.MicrofilmRefNumber?.Trim(),
                 TransactionDateTime = x.TransactionDate,
                 TransactionDate = x.TransactionDate.HasValue ? DateOnly.FromDateTime(x.TransactionDate.Value) : null,
                 PostingDate = x.ProcessingDate ?? (x.TransactionDate.HasValue ? DateOnly.FromDateTime(x.TransactionDate.Value) : null),
@@ -222,6 +224,8 @@ public static class NormalizedProjection
                 // Cardholder accounts are denominated per card currency but post in MUR.
                 Amount = Math.Abs(g.TranAmt ?? 0m),
                 Currency = GlPostingCurrency,
+                // Preserve the complete GL particular. The engine derives the credit match key by
+                // removing its first twelve-character BankOne posting prefix.
                 Reference = g.TranParticular2?.Trim(),
                 Description = CombineDescription(g.TranParticular, g.TranRmks),
                 DebitCreditIndicator = (g.Debit ?? 0m) > 0 ? "D" : "C",

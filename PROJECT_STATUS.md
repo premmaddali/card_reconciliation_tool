@@ -1,6 +1,6 @@
 # ReconTool — Project Status & Task Register
 
-**Multi-Scheme Card Reconciliation Platform** — status as of **2026-08-24** (branch `recon_platform`).
+**Multi-Scheme Card Reconciliation Platform** — status as of **2026-08-28** (branch `recon_platform`).
 
 A .NET 9 Blazor Server application that automates the (previously manual, Excel-based) reconciliation
 of card settlement against the general ledger. Originally a Mastercard/BankOne tool, now evolving into
@@ -20,8 +20,8 @@ CMS platforms and core-banking formats are added through adapters and configurat
 
 | | |
 |---|---|
-| Solution | `C:\Projects\ReconTool\Recon.sln` (`Recon.Web` + `Recon.Web.Tests`) |
-| Run | `dotnet run --project Recon.Web` → **http://localhost:5104** (launch profile `recon-web`) |
+| Solution | `C:\Projects\ReconTool\Recon.slnx` (`Recon.Web` + `Recon.Web.Tests`) |
+| Run | `powershell -ExecutionPolicy Bypass -File C:\Projects\ReconTool\Scripts\Start-ReconTool.ps1` → **http://localhost:5104**; stop with `Scripts\Stop-ReconTool.ps1` |
 | CSS build | `npm run build:css` in `Recon.Web` (Tailwind v4) — run after markup changes |
 | Database | SQL Server `localhost`, database **`Recon`** (migrations auto-apply on startup) |
 | Login | **`admin` / `Admin@123`** — ⚠️ change on first use |
@@ -62,16 +62,20 @@ CMS platforms and core-banking formats are added through adapters and configurat
 - Verified: row counts exact (11,533 / 107,544 / 71,641 / 22,987 / 106,282).
 
 ### 3.3 Reconciliation engine ✅
-- **Four independent functions**: **ATM → GL**, **POS → GL**, **Bulk (Interchange) → GL**, and
-  **Network ↔ ATM** (T464 network settlement validated against ATM settlement, with no GL side).
+- **Three independent functions**: **POS → GL**, **Bulk (Interchange) → GL**, and **Network ↔ ATM**.
+  ATM has no GL dataset and is validated only against T464 network settlement.
 - Scopes GL to the **six seeded settlement accounts** (cardholder DR + intermediary CR, per MUR/USD/EUR),
   channel via the `POS/`·`CASH/` particular prefix, routed by currency.
-- **Weighted confidence match** — amount + date primary (45 + 33), reference + channel add weight
+- **Weighted confidence match** — amount + date primary (45 + 33), adapter-defined key + channel add weight
   (17 + 5); threshold 70; reference-identity catches amount mismatches. Weights configurable in
   `appsettings` (`MatchWeights`).
 - Persists `ReconMatch`, `ReconException`, `ReconPassSummary` (daily **and** monthly, per currency,
   non-GL currencies bucketed to "Other").
-- Verified on real March data: **POS 54,623/71,641 · ATM 5,742/22,987 · Bulk 62,385/107,544**.
+- **Mastercard credit correction (2026-08-27):** debit matches `REFERENCE_NUMBER` to GL
+  `TRAN_PARTICULAR_2`; credit matches `MICROFILM REF NUMBER` to `TRAN_PARTICULAR_2.Substring(12)`.
+  The match register and Advanced Analysis expose `Reference`, `Microfilm`, and effective
+  `TRAN_PARTICULAR_2`, with filters for the latter two. The prior March counts are superseded pending a
+  fresh Bulk run and measured acceptance baseline.
 
 ### 3.4 Batch-centric workflow ✅ (current UX)
 - Each recon screen = **"New reconciliation batch"**: pick a **period (from/to)**, upload **TRX** + **GL**
@@ -83,6 +87,9 @@ CMS platforms and core-banking formats are added through adapters and configurat
 - **Duplicate-period warning** (function + date range) with non-blocking "Run anyway".
 - **Results view = 3 tabs**: **Transactions** (TRX rows), **GL entries** (relevant rows only, filtered
   to accounts + channel), **Reconciliation** (stat cards + currency summary + exceptions). Paged tables.
+- **Mastercard review columns:** Match results and Advanced Analysis show `Reference`, `Microfilm`, and
+  effective `TRAN_PARTICULAR_2`; the latter is unchanged for debit and `Substring(12)` for credit. Match
+  results supports column filters for Microfilm and `TRAN_PARTICULAR_2`.
 - Batches list per function; all values persisted and reopenable.
 
 ### 3.5 Exception workflow ✅
@@ -113,6 +120,18 @@ CMS platforms and core-banking formats are added through adapters and configurat
 ### 3.7 Dashboard ✅
 - Home dashboard: stat tiles (files, rows staged, sources loaded, runs), recent completed runs, quick
   links to each recon function.
+- Dashboard includes a role-aware **Awaiting verification** queue: a signed-in user sees only runs whose
+  active workflow step is assigned to one of their roles.
+
+### 3.7.1 Batch lifecycle & administration ✅ / follow-up
+- A completed run can be archived; an immutable `BatchArchive` snapshot and transaction-level
+  `BatchArchiveTransaction` rows are retained, while the live run is hidden from active batch lists.
+- Freezing a reconciliation scope archives all completed runs for the same function, scheme and period,
+  then blocks a new reconciliation for that scope. Source staging data remains retained for audit safety.
+- Roles & access groups permission rows by payment scheme and provides an **All** grant that sets
+  View, Add, Edit and Delete together.
+- Run parameters now includes controlled Scheme Profile setup (name, CMS, adapter, function). A restart
+  generates its scheme menu entries.
 
 ### 3.8 Generic multi-scheme platform ✅ (branch `recon_platform`)
 - **Adapter architecture** (`Recon.Web/Platform/`): `ITransactionAdapter` / `IGlcAdapter` parse scheme- and
@@ -147,6 +166,7 @@ CMS platforms and core-banking formats are added through adapters and configurat
 |---|---|
 | Identity / access | `AspNetUsers/Roles/…`, `AppPage`, `AppAccess`, `AppAccessMenu`, `UserAppAccess` |
 | Import control | `ImportBatch` (+ `SchemeProfileId`), `ReconRun` (+ `SchemeProfileId`; function, period range, processor/GL/network batch refs, headline results) |
+| Archive / freeze | `BatchArchive`, `BatchArchiveTransaction`, `BatchFreeze` (immutable run/result snapshots and frozen scopes) |
 | Staging (raw) | `StgDebitSettlement` (ATM+POS), `StgInterchangeFee`, `StgGlEntry`, `StgNetworkT464` |
 | Platform (normalized) | `SchemeProfile`, `NormalizedTransaction`, `NormalizedGlEntry` |
 | Recon results | `ReconMatch`, `ReconException`, `ReconExceptionComment`, `ReconPassSummary`, `AtmNetworkValidation` |
@@ -158,8 +178,10 @@ Full column-level contract in **[DataModel.md](DataModel.md)**.
 
 ## 5. Key domain facts (for anyone new to the reconciliation)
 
-- Match key: processor `REFERENCE_NUMBER` == GL `TRAN_PARTICULAR_2` on the cardholder-settlement
-  accounts; GL `REF_NUM` is unusable (all NULL). GL `TRAN_PARTICULAR` prefix separates `POS/` vs `CASH/`.
+- Match keys are channel/product-specific: debit uses processor `REFERENCE_NUMBER` == GL
+  `TRAN_PARTICULAR_2`; credit uses processor `MICROFILM REF NUMBER` == `TRAN_PARTICULAR_2` from its
+  thirteenth character (zero-based `Substring(12)`). GL `REF_NUM` is unusable. Repeated keys are distinct business events when their
+  `TRANSACTION_CODE` differs (`01` purchase, `04` cash, `09` credit).
 - The six GL accounts: cardholder settlement DR `9849065772/773/774` (MUR/USD/EUR); intermediary
   settlement CR `9849077911/913/912`.
 - Reference-only matching would wrongly flag ~74% of ATM (their references aren't in the GL, and ATM
@@ -184,8 +206,15 @@ Full column-level contract in **[DataModel.md](DataModel.md)**.
 ## 7. Pending tasks
 
 ### High priority
-1. **Default admin password** flow — force/allow password change; currently `admin/Admin@123` is
-   seeded and must be changed manually.
+1. **Rebaseline Mastercard credit matching** — run a clean Bulk reconciliation using the corrected
+   `MicrofilmRefNumber` ↔ `TranParticular2.Substring(12)` rule; record credit/debit match rates and review
+   unmatched credit rows before accepting the new result baseline.
+2. ~~Default admin password flow~~ ✅ Local users can change their password from the header’s lock icon;
+   the seeded `admin/Admin@123` account should be changed immediately after first sign-in.
+3. ~~Queue & audit reporting~~ ✅ Dashboard queue is labelled **My queue**; `/admin/audit-reports` lists
+   run, submission, verification, archive and freeze activity with activity, user and period filters.
+4. ~~Archive/freeze authorization~~ ✅ Separate **Archive batch** and **Freeze period** Edit grants are
+   configurable in Roles & access and enforced by `BatchArchiveService`.
 
 ### Medium priority
 4. **Intermediary-account reconciliation** — v1 matches against cardholder-settlement rows only; the

@@ -1,29 +1,18 @@
-<span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium @Classes">
-    <span class="h-1.5 w-1.5 rounded-full @DotClasses"></span>
-    @Text
-</span>
+<span class="inline-flex min-w-32 items-center justify-center whitespace-nowrap rounded-full px-3 py-1 text-center text-xs font-medium @Classes">@Text</span>
 
 @code {
     [Parameter, EditorRequired] public string Text { get; set; } = "";
 
-    /// <summary>green | gray | red | amber | blue</summary>
+    /// <summary>green | green-soft | gray | red | amber | blue</summary>
     [Parameter] public string Color { get; set; } = "gray";
 
     private string Classes => Color switch
     {
-        "green" => "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-        "red" => "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300",
-        "amber" => "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-        "blue" => "bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300",
-        _ => "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-    };
-
-    private string DotClasses => Color switch
-    {
-        "green" => "bg-emerald-500",
-        "red" => "bg-red-500",
-        "amber" => "bg-amber-500",
-        "blue" => "bg-primary-500",
-        _ => "bg-gray-400"
+        "green" => "bg-emerald-200 dark:bg-emerald-800",
+        "green-soft" => "bg-emerald-100 dark:bg-emerald-700",
+        "red" => "bg-red-200 dark:bg-red-800",
+        "amber" => "bg-amber-200 dark:bg-amber-800",
+        "blue" => "bg-primary-200 dark:bg-primary-800",
+        _ => "bg-gray-200 dark:bg-gray-600"
     };
 }

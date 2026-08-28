@@ -61,6 +61,10 @@ public class ReconRun : IAuditable
     public int MatchedCount { get; set; }
     public int ExceptionCount { get; set; }
     public decimal AverageConfidence { get; set; }
+    /// <summary>Whether this run accepted small amount differences, plus the frozen applied value.</summary>
+    public bool ApplyAmountTolerance { get; set; }
+    public decimal? AmountTolerance { get; set; }
+    public bool IsArchived { get; set; }
 
     // Configurable maker/checker workflow state.  The responsible actor is a readable snapshot
     // because a step may be assigned to more than one business role.

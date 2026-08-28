@@ -39,6 +39,7 @@ builder.Services.AddScoped<IAtmNetworkValidationService, AtmNetworkValidationSer
 builder.Services.AddScoped<INetworkAtmReconService, NetworkAtmReconService>();
 builder.Services.AddScoped<IExceptionWorkflowService, ExceptionWorkflowService>();
 builder.Services.AddScoped<IReconVerificationService, ReconVerificationService>();
+builder.Services.AddScoped<IBatchArchiveService, BatchArchiveService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<ILdapAuthService, LdapAuthService>();
 builder.Services.Configure<MatchWeights>(builder.Configuration.GetSection(MatchWeights.SectionName));
@@ -143,6 +144,27 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
     return Results.Redirect("/login");
 });
 
+app.MapPost("/auth/change-password", async (HttpContext http, UserManager<AppUser> userManager, SignInManager<AppUser> signInManager) =>
+{
+    var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
+
+    var form = await http.Request.ReadFormAsync();
+    var currentPassword = form["currentPassword"].ToString();
+    var newPassword = form["newPassword"].ToString();
+    var confirmPassword = form["confirmPassword"].ToString();
+    if (string.IsNullOrWhiteSpace(currentPassword) || string.IsNullOrWhiteSpace(newPassword)) return Results.Redirect("/account/password?error=missing");
+    if (newPassword != confirmPassword) return Results.Redirect("/account/password?error=mismatch");
+
+    var user = await userManager.FindByIdAsync(userId.ToString());
+    if (user is null || user.AuthProvider != AuthProvider.Local) return Results.Redirect("/account/password?error=provider");
+    var result = await userManager.ChangePasswordAsync(user, currentPassword, newPassword);
+    if (!result.Succeeded) return Results.Redirect("/account/password?error=invalid");
+
+    await signInManager.RefreshSignInAsync(user);
+    return Results.Redirect("/account/password?changed=1");
+}).RequireAuthorization();
+
 // Downloads the frozen run summary and its exception register as an analyst-ready workbook.
 app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
     int runId, HttpContext http, IPermissionService permissions, AppDbContext db, CancellationToken ct) =>
@@ -239,13 +261,17 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
 
 // Downloads every row selected by the Match results filters (not merely the current page).
 app.MapGet("/api/recon/{runId:int}/matches.csv", async (
-    int runId, string? result, string? reference, string? processorAccount, string? glAccount,
+    int runId, string? result, string? reference, string? microfilm, string? glParticular2, string? processorAccount, string? glAccount,
     string? search, string? cardType, string? merchant, string? processorDescription,
     int? txnCcy, int? billingCcy, int? settlementCcy, int? reconCcy, bool? otherReconCcy, byte? leg, int? glCcy, decimal? maxDifference,
     DateOnly? processorDate, DateOnly? glDate, DateOnly? glPostingDate,
-    string? sort, bool? sortDescending,
+    string? sort, string? sortDescending,
     HttpContext http, IPermissionService permissions, AppDbContext db, CancellationToken ct) =>
 {
+    // Keep downloads resilient to a trailing '?' added by a browser/navigation layer. Minimal-API
+    // nullable bool binding rejects values such as "true?" before this handler can respond.
+    var descending = bool.TryParse(sortDescending?.TrimEnd('?'), out var parsedDescending) && parsedDescending;
+
     var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
     if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
 
@@ -278,6 +304,8 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
     if (!string.IsNullOrWhiteSpace(search))
         query = query.Where(m => (m.ReferenceNumber != null && m.ReferenceNumber.Contains(search)) || (m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(search)));
     if (!string.IsNullOrWhiteSpace(reference)) query = query.Where(m => m.ReferenceNumber != null && m.ReferenceNumber.Contains(reference));
+    if (!string.IsNullOrWhiteSpace(microfilm)) query = query.Where(m => m.MicrofilmRefNumber != null && m.MicrofilmRefNumber.Contains(microfilm));
+    if (!string.IsNullOrWhiteSpace(glParticular2)) query = query.Where(m => m.GlParticular2 != null && m.GlParticular2.Contains(glParticular2));
     if (!string.IsNullOrWhiteSpace(processorAccount)) query = query.Where(m => m.ProcessorAccountNumber != null && m.ProcessorAccountNumber.Contains(processorAccount));
     if (string.Equals(cardType, "blank", StringComparison.OrdinalIgnoreCase)) query = query.Where(m => m.ProcessorProductType == null || m.ProcessorProductType == "");
     else if (!string.IsNullOrWhiteSpace(cardType)) query = query.Where(m => m.ProcessorProductType != null && m.ProcessorProductType == cardType);
@@ -309,24 +337,24 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
 
     query = (sort ?? "date").ToLowerInvariant() switch
     {
-        "date" when sortDescending == true => query.OrderByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ProcessorDate).ThenByDescending(m => m.ReconMatchId),
+        "date" when descending => query.OrderByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ProcessorDate).ThenByDescending(m => m.ReconMatchId),
         "date" => query.OrderBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ProcessorDate).ThenBy(m => m.ReconMatchId),
-        "gl_date" when sortDescending == true => query.OrderByDescending(m => m.GlDate).ThenByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.ReconMatchId),
+        "gl_date" when descending => query.OrderByDescending(m => m.GlDate).ThenByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.ReconMatchId),
         "gl_date" => query.OrderBy(m => m.GlDate).ThenBy(m => m.GlPostingDateTime).ThenBy(m => m.ReconMatchId),
-        "gl_posting" when sortDescending == true => query.OrderByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.GlDate).ThenByDescending(m => m.ReconMatchId),
+        "gl_posting" when descending => query.OrderByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.GlDate).ThenByDescending(m => m.ReconMatchId),
         "gl_posting" => query.OrderBy(m => m.GlPostingDateTime).ThenBy(m => m.GlDate).ThenBy(m => m.ReconMatchId),
-        "confidence" when sortDescending == true => query.OrderByDescending(m => m.Confidence).ThenByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ReconMatchId),
+        "confidence" when descending => query.OrderByDescending(m => m.Confidence).ThenByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ReconMatchId),
         "confidence" => query.OrderBy(m => m.Confidence).ThenBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ReconMatchId),
         _ => query.OrderByDescending(m => m.ReconMatchId)
     };
 
     var matches = await query.ToListAsync(ct);
-    var csv = new StringBuilder("\uFEFFResult,Reference,Transaction Date Time,Processor Account,Card Type,Merchant,Processor Description,GL Account,GL Description,Transaction Amount,Transaction Currency,Billing Amount,Billing Currency,Settlement Amount,Settlement Currency,Reconciliation Amount,Reconciliation Currency,GL Transaction Date,GL Posting Date Time,GL Amount,GL Currency,Difference,Match Comment,Confidence,Score Breakdown\r\n");
+    var csv = new StringBuilder("\uFEFFResult,Reference,Transaction Date Time,Processor Account,Card Type,Merchant,Processor Description,GL Account,GL Reference,GL Description,Transaction Amount,Transaction Currency,Billing Amount,Billing Currency,Settlement Amount,Settlement Currency,Reconciliation Amount,Reconciliation Currency,GL Transaction Date,GL Posting Date Time,GL Amount,GL Currency,Difference,Match Comment,Confidence,Score Breakdown\r\n");
     foreach (var m in matches)
     {
         var fields = new (string? Value, bool ProtectForExcel)[]
         {
-            (ResultName(m.MatchStatus), true), (m.ReferenceNumber, true), (DateTimeValue(m.ProcessorTransactionDateTime, m.ProcessorDate), false), (m.ProcessorAccountNumber, true), (m.ProcessorProductType, true), (m.ProcessorMerchant, true), (m.ProcessorDescription, true), (m.GlAccountNumber, true), (m.GlDescription, true),
+            (ResultName(m.MatchStatus), true), (m.ReferenceNumber, true), (DateTimeValue(m.ProcessorTransactionDateTime, m.ProcessorDate), false), (m.ProcessorAccountNumber, true), (m.ProcessorProductType, true), (m.ProcessorMerchant, true), (m.ProcessorDescription, true), (m.GlAccountNumber, true), (m.GlReference, true), (m.GlDescription, true),
             (Amount(m.ProcessorAmount), false), (Currency(m.ProcessorCcy), true), (Amount(m.BillingAmount), false), (Currency(m.BillingCcy), true),
             (Amount(m.SettlementAmount), false), (Currency(m.SettlementCcy), true), (Amount(m.ReconciliationAmount), false), (Currency(m.Ccy), true),
             (DateOnlyValue(m.GlDate), false), (DateTimeValue(m.GlPostingDateTime, null), false), (Amount(m.GlAmount), false), (Currency(m.GlCcy ?? 480), true), (Amount(m.ReconciliationAmount is { } p && m.GlAmount is { } g ? Math.Abs(p - g) : null), false), (m.MatchComment, true), (m.Confidence.ToString("0.0", CultureInfo.InvariantCulture), false), (m.ScoreBreakdown, true)

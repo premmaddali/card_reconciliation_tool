@@ -23,6 +23,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     // Import & run control
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<ReconRun> ReconRuns => Set<ReconRun>();
+    public DbSet<ReconParameters> ReconParameters => Set<ReconParameters>();
+    public DbSet<BatchArchive> BatchArchives => Set<BatchArchive>();
+    public DbSet<BatchArchiveTransaction> BatchArchiveTransactions => Set<BatchArchiveTransaction>();
+    public DbSet<BatchFreeze> BatchFreezes => Set<BatchFreeze>();
 
     // Staging
     public DbSet<StgNetworkT464> StgNetworkT464 => Set<StgNetworkT464>();

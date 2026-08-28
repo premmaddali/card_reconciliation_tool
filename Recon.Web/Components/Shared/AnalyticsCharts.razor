@@ -1,0 +1,46 @@
+@* Lightweight native charts: no external JavaScript dependency, fully theme-aware. *@
+<div class="grid gap-5 xl:grid-cols-2">
+    <section class="analytics-card rounded-2xl border p-5">
+        <h2 class="text-base font-semibold text-slate-900 dark:text-white">@DonutTitle</h2>
+        @if (Segments.Count == 0 || Segments.All(s => s.Value == 0))
+        {
+            <p class="mt-8 text-sm text-slate-500 dark:text-slate-400">No data is available yet.</p>
+        }
+        else
+        {
+            <div class="mt-5 flex flex-col items-center gap-5 sm:flex-row sm:items-start">
+                <div class="analytics-donut" style="@DonutStyle"><div class="analytics-donut__center"><strong>@Segments.Sum(s => s.Value).ToString("N0")</strong><span>Total</span></div></div>
+                <div class="grid flex-1 gap-2 text-sm">@foreach (var segment in Segments) { <div class="flex items-center justify-between gap-3"><span class="flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-300"><i class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:@segment.Color"></i><span class="truncate">@segment.Label</span></span><strong class="tabular-nums text-slate-900 dark:text-white">@segment.Value.ToString("N0")</strong></div> }</div>
+            </div>
+        }
+    </section>
+    <section class="analytics-card rounded-2xl border p-5">
+        <h2 class="text-base font-semibold text-slate-900 dark:text-white">@BarTitle</h2>
+        @if (Bars.Count == 0 || Bars.All(b => b.Value == 0))
+        {
+            <p class="mt-8 text-sm text-slate-500 dark:text-slate-400">No data is available yet.</p>
+        }
+        else
+        {
+            <div class="mt-6 space-y-4">@foreach (var bar in Bars) { <div><div class="mb-1.5 flex items-center justify-between gap-3 text-sm"><span class="truncate text-slate-600 dark:text-slate-300">@bar.Label</span><strong class="tabular-nums text-slate-900 dark:text-white">@bar.Value.ToString("N0")</strong></div><div class="analytics-bar-track"><div class="analytics-bar-fill" style="width:@Percent(bar.Value)%; background:@bar.Color"></div></div></div> }</div>
+        }
+    </section>
+</div>
+
+@code {
+    [Parameter] public string DonutTitle { get; set; } = "Distribution";
+    [Parameter] public string BarTitle { get; set; } = "Top activity";
+    [Parameter] public IReadOnlyList<AnalyticsSegment> Segments { get; set; } = [];
+    [Parameter] public IReadOnlyList<AnalyticsBar> Bars { get; set; } = [];
+    private string DonutStyle
+    {
+        get
+        {
+            var total = Segments.Sum(s => s.Value);
+            var cursor = 0d;
+            var stops = Segments.Where(s => s.Value > 0).Select(s => { var next = cursor + (100d * s.Value / total); var stop = $"{s.Color} {cursor:0.##}% {next:0.##}%"; cursor = next; return stop; });
+            return $"background:conic-gradient({string.Join(", ", stops)})";
+        }
+    }
+    private double Percent(long value) => Bars.Count == 0 ? 0 : 100d * value / Math.Max(1, Bars.Max(b => b.Value));
+}

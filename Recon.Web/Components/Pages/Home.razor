@@ -12,7 +12,7 @@
 
 <div class="mb-5 flex gap-1 border-b border-gray-200 dark:border-gray-700">
     <button type="button" @onclick='() => _dashboardTab = "overview"' class='@DashboardTabClass("overview")'>Overview</button>
-    <button type="button" @onclick='() => _dashboardTab = "awaiting"' class='@DashboardTabClass("awaiting")'>Awaiting verification <span class="ml-1 rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] text-primary-700 dark:bg-primary-900/40 dark:text-primary-200">@_awaiting.Count</span></button>
+    <button type="button" @onclick='() => _dashboardTab = "awaiting"' class='@DashboardTabClass("awaiting")'>My queue <span class="ml-1 rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] text-primary-700 dark:bg-primary-900/40 dark:text-primary-200">@_awaiting.Count</span></button>
 </div>
 
 @if (_dashboardTab == "overview")
@@ -31,6 +31,7 @@
         <Icon><RefreshIcon Class="h-5 w-5" /></Icon>
     </StatCard>
 </div>
+<div class="mt-6"><AnalyticsCharts DonutTitle="Completed runs by function" BarTitle="Exceptions by function" Segments="@_runDistribution" Bars="@_exceptionDistribution" /></div>
 }
 else
 {
@@ -93,6 +94,8 @@ else
     private int _batchCount, _runCount, _sourcesLoaded;
     private long _rowCount;
     private List<ReconRun> _runs = new();
+    private List<AnalyticsSegment> _runDistribution = new();
+    private List<AnalyticsBar> _exceptionDistribution = new();
     private sealed record AwaitingItem(int RunId, ReconFunction Function, string Period, string? NextAction, string? Responsible);
     private List<AwaitingItem> _awaiting = new();
     private string _dashboardTab = "overview";
@@ -107,6 +110,12 @@ else
         _runCount = await db.ReconRuns.CountAsync();
         _runs = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed)
             .OrderByDescending(r => r.CreatedDate).Take(8).ToListAsync();
+        var completed = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed && !r.IsArchived)
+            .Select(r => new { r.Function, r.ExceptionCount }).ToListAsync();
+        _runDistribution = completed.GroupBy(r => r.Function).OrderByDescending(g => g.Count())
+            .Select((g, i) => new AnalyticsSegment(FunctionName(g.Key), g.LongCount(), ChartColors[i % ChartColors.Length])).ToList();
+        _exceptionDistribution = completed.GroupBy(r => r.Function).OrderByDescending(g => g.Sum(x => x.ExceptionCount))
+            .Select((g, i) => new AnalyticsBar(FunctionName(g.Key), g.Sum(x => (long)x.ExceptionCount), ChartColors[i % ChartColors.Length])).ToList();
 
         var state = await AuthState.GetAuthenticationStateAsync();
         var claim = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -140,4 +149,5 @@ else
         ReconFunction.NetworkToAtm => "Network ↔ ATM recon",
         _ => "Bulk recon"
     };
+    private static readonly string[] ChartColors = ["#6f982b", "#4f8dcf", "#d19035", "#d25349", "#8d70c9"];
 }

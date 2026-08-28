@@ -22,8 +22,16 @@
             <div @key="@(group.Key.GroupName ?? "_")">
                 @if (group.Key.GroupName is not null)
                 {
-                    <p class="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 @(Collapsed ? "hidden" : "")">@group.Key.GroupName</p>
+                    <button type="button" @onclick="() => ToggleGroup(GroupKey(group.Key.GroupName, group.Key.GroupSequence))" title="@(IsGroupExpanded(group.Key.GroupName, group.Key.GroupSequence) ? $"Collapse {group.Key.GroupName}" : $"Expand {group.Key.GroupName}")"
+                            class="mb-2 flex w-full items-center gap-2 px-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 @(Collapsed ? "hidden" : "")">
+                        <span class="flex-1">@group.Key.GroupName</span>
+                        <svg class="h-4 w-4 shrink-0 transition-transform duration-200 @(IsGroupExpanded(group.Key.GroupName, group.Key.GroupSequence) ? "rotate-90" : "")" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
                 }
+                @if (IsGroupExpanded(group.Key.GroupName, group.Key.GroupSequence) || group.Key.GroupName is null)
+                {
                 <div class="space-y-0.5">
                     @* Scheme groups (no route) render as collapsible headers with their children nested. *@
                     @foreach (var item in group.Where(m => m.Route is null))
@@ -68,6 +76,7 @@
                         </NavLink>
                     }
                 </div>
+                }
             </div>
         }
     </nav>
@@ -90,6 +99,15 @@
     private string _roleLabel = "";
     private string? _activeRoute;
     private HashSet<string> _expanded = new();
+    private HashSet<string> _collapsedGroups = new();
+
+    private static string GroupKey(string? groupName, int groupSequence) => $"{groupSequence}:{groupName}";
+    private bool IsGroupExpanded(string? groupName, int groupSequence) => !_collapsedGroups.Contains(GroupKey(groupName, groupSequence));
+
+    private void ToggleGroup(string groupKey)
+    {
+        if (!_collapsedGroups.Add(groupKey)) _collapsedGroups.Remove(groupKey);
+    }
 
     private void Toggle(string schemeName)
     {

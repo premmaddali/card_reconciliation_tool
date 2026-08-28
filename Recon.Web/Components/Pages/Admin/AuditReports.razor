@@ -1,0 +1,50 @@
+@page "/admin/audit-reports"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.ICurrentUserService CurrentUser
+@inject Recon.Web.Services.IPermissionService Permissions
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+
+<PageTitle>Audit reports · Recon Tool</PageTitle>
+<PageHeader Title="Audit reports" Subtitle="Run, verification, manual-match, archive, and freeze activity" Eyebrow="Administration" Icon="list" Breadcrumbs="@(new[] { "Administration", "Audit reports" })" />
+
+<div class="mb-5 flex flex-wrap gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <select @bind="_type" @bind:after="LoadAsync" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900"><option value="">All activity</option><option>Run created</option><option>Submitted</option><option>Verified</option><option>Manual GL match</option><option>Archived</option><option>Period frozen</option></select>
+    <input @bind="_period" @bind:after="LoadAsync" placeholder="Period (e.g. 2026-03)" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900" />
+    <input type="date" @bind="_from" @bind:after="LoadAsync" aria-label="Activity from date" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900" />
+    <input type="date" @bind="_to" @bind:after="LoadAsync" aria-label="Activity to date" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900" />
+    <select @bind="_userId" @bind:after="LoadAsync" class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900"><option value="">All users</option>@foreach (var user in _users) { <option value="@user.Id">@user.Name</option> }</select>
+</div>
+
+<div class="mb-5"><AnalyticsCharts DonutTitle="Activity by type" BarTitle="Most active users" Segments="@_activityDistribution" Bars="@_userDistribution" /></div>
+
+<div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800"><table class="w-full text-left text-sm"><thead class="border-b border-gray-100 text-xs uppercase tracking-wider text-gray-500 dark:border-gray-700"><tr><th class="px-5 py-3">When</th><th class="px-5 py-3">Activity</th><th class="px-5 py-3">Batch</th><th class="px-5 py-3">Period</th><th class="px-5 py-3">User</th></tr></thead><tbody class="divide-y divide-gray-100 dark:divide-gray-700">@if (_rows.Count == 0) { <tr><td colspan="5" class="px-5 py-10 text-center text-gray-500">No activity matches these filters.</td></tr> } @foreach (var row in _rows) { <tr @key="row.Key"><td class="px-5 py-3 whitespace-nowrap">@row.When.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td><td class="px-5 py-3 font-medium">@row.Type</td><td class="px-5 py-3">@if (row.RunId is { } runId) { <a href="@($"/recon/run/{runId}")" class="text-primary-700 hover:underline">#@runId</a> }</td><td class="px-5 py-3">@row.Period</td><td class="px-5 py-3">@row.User</td></tr> }</tbody></table></div>
+
+@code {
+    private sealed record UserOption(string Id, string Name);
+    private sealed record AuditRow(string Key, DateTime When, string Type, int? RunId, string Period, Guid UserId, string User);
+    private List<UserOption> _users = new(); private List<AuditRow> _rows = new(); private List<AnalyticsSegment> _activityDistribution = new(); private List<AnalyticsBar> _userDistribution = new(); private string _type = "", _period = "", _userId = ""; private DateOnly? _from, _to;
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Permissions.CanViewAsync(CurrentUser.UserId, "AUDITREPORTS")) { Nav.NavigateTo("/"); return; }
+        await LoadAsync();
+    }
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _users = await db.Users.AsNoTracking().OrderBy(u => u.FullName).Select(u => new UserOption(u.Id.ToString(), string.IsNullOrWhiteSpace(u.FullName) ? u.UserName! : u.FullName)).ToListAsync();
+        var names = _users.ToDictionary(u => u.Id, u => u.Name);
+        var rows = new List<AuditRow>();
+        rows.AddRange(await db.ReconRuns.AsNoTracking().Select(r => new { r.ReconRunId, r.PeriodKey, r.CreatedDate, r.CreatedBy }).Select(x => new AuditRow($"run-{x.ReconRunId}", x.CreatedDate, "Run created", x.ReconRunId, x.PeriodKey, x.CreatedBy, "")).ToListAsync());
+        rows.AddRange(await db.ReconWorkflowHistories.AsNoTracking().Join(db.ReconRuns, h => h.ReconRunId, r => r.ReconRunId, (h, r) => new { h, r.PeriodKey }).Select(x => new AuditRow($"workflow-{x.h.ReconWorkflowHistoryId}", x.h.ActionedDate, x.h.Action == ReconWorkflowAction.Submitted ? "Submitted" : "Verified", x.h.ReconRunId, x.PeriodKey, x.h.ActionedByUserId, "")).ToListAsync());
+        rows.AddRange(await db.ReconExceptionComments.AsNoTracking().Where(c => c.Body.StartsWith("[Manual GL match]")).Join(db.ReconExceptions, c => c.ReconExceptionId, e => e.ReconExceptionId, (c, e) => new { c, e.ReconRunId }).Join(db.ReconRuns, x => x.ReconRunId, r => r.ReconRunId, (x, r) => new AuditRow($"manual-gl-{x.c.ReconExceptionCommentId}", x.c.CreatedDate, "Manual GL match", x.ReconRunId, r.PeriodKey, x.c.CreatedBy, "")).ToListAsync());
+        rows.AddRange(await db.BatchArchives.AsNoTracking().Select(a => new AuditRow($"archive-{a.BatchArchiveId}", a.ArchivedDate, "Archived", a.OriginalReconRunId, a.PeriodKey, a.ArchivedBy, "")).ToListAsync());
+        rows.AddRange(await db.BatchFreezes.AsNoTracking().Select(f => new AuditRow($"freeze-{f.BatchFreezeId}", f.FrozenDate, "Period frozen", f.FrozenFromReconRunId, f.PeriodKey, f.FrozenBy, "")).ToListAsync());
+        _rows = rows.Where(r => (_type == "" || r.Type == _type) && (string.IsNullOrWhiteSpace(_period) || r.Period.Contains(_period, StringComparison.OrdinalIgnoreCase)) && (_userId == "" || r.UserId.ToString() == _userId) && (_from is null || DateOnly.FromDateTime(r.When) >= _from) && (_to is null || DateOnly.FromDateTime(r.When) <= _to)).OrderByDescending(r => r.When).Take(1000).Select(r => r with { User = names.GetValueOrDefault(r.UserId.ToString(), "System") }).ToList();
+        _activityDistribution = _rows.GroupBy(r => r.Type).OrderByDescending(g => g.Count()).Select((g, i) => new AnalyticsSegment(g.Key, g.LongCount(), ChartColors[i % ChartColors.Length])).ToList();
+        _userDistribution = _rows.GroupBy(r => r.User).OrderByDescending(g => g.Count()).Take(6).Select((g, i) => new AnalyticsBar(g.Key, g.LongCount(), ChartColors[i % ChartColors.Length])).ToList();
+    }
+    private static readonly string[] ChartColors = ["#6f982b", "#4f8dcf", "#d19035", "#d25349", "#8d70c9"];
+}

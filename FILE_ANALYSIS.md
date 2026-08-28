@@ -18,7 +18,8 @@ Profiling of the five sample exports in `SharedFiles/`. Base currency **MUR (ISO
 
 ## Join-key overlap (measured)
 
-`REFERENCE_NUMBER` (12-digit, e.g. `605827366477`) is the backbone key.
+`REFERENCE_NUMBER` (12-digit, e.g. `605827366477`) is the debit/network key. Credit-card GL matching uses a separate key:
+`MICROFILM REF NUMBER` ↔ `TRAN_PARTICULAR_2.Substring(12)`. The first twelve GL characters are the posting prefix.
 
 | Test | Result | Meaning |
 |---|---|---|
@@ -28,8 +29,8 @@ Profiling of the five sample exports in `SharedFiles/`. Base currency **MUR (ISO
 | ATM ∩ T464 | 5,683 | T464 covers cash/ATM network traffic |
 | POS ∩ T464 | 4 | T464 is **not** a POS source |
 
-**GL** `REF_NUM` is populated on only **2,734 / 106,282** rows → GL cannot be joined per-transaction;
-it reconciles at account/total level.
+**GL** `REF_NUM` is populated on only **2,734 / 106,282** rows. Debit uses `TRAN_PARTICULAR_2`; credit uses
+its value after the first twelve characters. There is currently no ATM GL dataset, so ATM is reconciled only to T464.
 
 ## GL account breakdown (by `GL_SUB_HEAD_CODE`)
 

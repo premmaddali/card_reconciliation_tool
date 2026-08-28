@@ -48,6 +48,7 @@
                     <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                         <tr class="border-b border-gray-100 dark:border-gray-700">
                             <th class="px-5 py-2.5 font-semibold">Page</th>
+                            <th class="px-3 py-2.5 text-center font-semibold">All</th>
                             <th class="px-3 py-2.5 text-center font-semibold">View</th>
                             <th class="px-3 py-2.5 text-center font-semibold">Add</th>
                             <th class="px-3 py-2.5 text-center font-semibold">Edit</th>
@@ -55,17 +56,22 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-                        @foreach (var p in _pages)
+                        @foreach (var group in _pages.GroupBy(p => p.ParentPage?.PageName ?? "Platform & administration"))
                         {
-                            var g = _grants.GetValueOrDefault(p.AppPageId) ?? new Grant();
-                            _grants[p.AppPageId] = g;
-                            <tr @key="p.AppPageId" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                            <tr class="bg-gray-50 dark:bg-gray-900/40"><td colspan="6" class="px-5 py-2 text-xs font-bold uppercase tracking-wide text-primary-700 dark:text-primary-300">@group.Key</td></tr>
+                            @foreach (var p in group)
+                            {
+                                var g = _grants.GetValueOrDefault(p.AppPageId) ?? new Grant();
+                                _grants[p.AppPageId] = g;
+                                <tr @key="p.AppPageId" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
                                 <td class="px-5 py-2.5 text-gray-700 dark:text-gray-200">@p.PageName</td>
+                                <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@HasAll(g)" @onchange="e => SetAll(g, (bool)e.Value!)" aria-label="All permissions for @p.PageName" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                                 <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.View" @onchange="e => g.View = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                                 <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Add" @onchange="e => g.Add = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                                 <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Edit" @onchange="e => g.Edit = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                                 <td class="px-3 py-2.5 text-center"><input type="checkbox" checked="@g.Delete" @onchange="e => g.Delete = (bool)e.Value!" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                             </tr>
+                            }
                         }
                     </tbody>
                 </table>
@@ -93,7 +99,9 @@
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         _roles = await db.AppAccesses.Where(a => a.IsActive).OrderBy(a => a.AccessName).ToListAsync();
-        _pages = await db.AppPages.Where(p => p.IsActive && p.Route != null).OrderBy(p => p.Sequence).ToListAsync();
+        _pages = await db.AppPages.Include(p => p.ParentPage)
+            .Where(p => p.IsActive && (p.Route != null || p.PageCode == "ARCHIVE_BATCH" || p.PageCode == "FREEZE_PERIOD" || p.PageCode == "MANUAL_GL_MATCH"))
+            .OrderBy(p => p.ParentPage!.Sequence).ThenBy(p => p.Sequence).ToListAsync();
         _userCounts = await db.UserAppAccesses.Where(a => a.IsActive)
             .GroupBy(a => a.AppAccessId).Select(g => new { g.Key, C = g.Count() })
             .ToDictionaryAsync(x => x.Key, x => x.C);
@@ -137,6 +145,9 @@
         _saving = false;
         _saved = true;
     }
+
+    private static bool HasAll(Grant grant) => grant.View && grant.Add && grant.Edit && grant.Delete;
+    private static void SetAll(Grant grant, bool enabled) => (grant.View, grant.Add, grant.Edit, grant.Delete) = (enabled, enabled, enabled, enabled);
 
     private string RoleBtnClass(AppAccess r)
     {

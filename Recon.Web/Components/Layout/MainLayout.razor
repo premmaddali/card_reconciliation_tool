@@ -1,7 +1,7 @@
 @inherits LayoutComponentBase
 @inject IJSRuntime Js
 
-<div class="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
+<div class="app-shell flex h-screen overflow-hidden">
     <SideNav Collapsed="@_sideNavCollapsed" />
 
     <div class="flex flex-1 flex-col overflow-hidden">
@@ -28,6 +28,9 @@
                         <ArrowRightToBracketIcon Class="h-5 w-5" />
                     </button>
                 </form>
+                <a href="/account/password" title="Change password" class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300">
+                    <LockIcon Class="h-5 w-5" />
+                </a>
                 <div class="mx-2 h-6 w-px bg-gray-200 dark:bg-gray-700"></div>
                 <AuthorizeView>
                     <Authorized>

@@ -313,3 +313,9 @@ New schemes, processors, CMS platforms, and banking systems should be
 introduced through adapters and configuration, minimizing future
 development effort and ensuring long-term maintainability and
 extensibility.
+# Matching-key rule
+
+The engine does not define a business match key. Each adapter emits its normalized match key: BankOne debit
+uses `ReferenceNumber`; BankOne credit uses `MicrofilmRefNumber`; future adapters may use retrieval reference,
+authorization code, trace number, or another scheme-specific identity. Duplicate analysis must include the
+adapter's transaction-event code where available.

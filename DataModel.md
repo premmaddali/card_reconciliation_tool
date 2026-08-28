@@ -22,8 +22,8 @@ conventions so the two apps are structurally identical. Types are shown as .NET 
 - **Money**: every amount is stored twice — the raw text as-received (`*Raw`) and a normalized signed
   `decimal(19,4)`. Currencies are numeric ISO (`480`=MUR, `840`=USD, `978`=EUR) stored as `int` +
   a 3-letter `*CcyCode` for display.
-- **Reference number** (`ReferenceNumber`, `char(12)`) is the transaction join key across the network
-  and processor files, indexed on every staging table that has it.
+- Matching keys are adapter-defined. `ReferenceNumber` remains the network/debit key; Mastercard credit GL
+  matching uses `MicrofilmRefNumber` against `TranParticular2.Substring(12)`.
 
 ---
 
@@ -51,7 +51,7 @@ A reconciliation execution for one `PeriodKey`, binding one batch of each requir
 | Column | .NET → SQL | Notes |
 |---|---|---|
 | ReconRunId | int PK | identity |
-| Function | enum tinyint | `AtmToGl`, `PosToGl`, `InterchangeToGl`, `NetworkToAtm` |
+| Function | enum tinyint | `AtmToGl`, `PosToGl`, `InterchangeToGl`, `NetworkToAtm`; Mastercard enables POS, Bulk, and Network ↔ ATM only |
 | PeriodKey / PeriodStart / PeriodEnd | string(7) / date null | run period and user-selected range |
 | Status | enum tinyint | `Draft`, `Running`, `Completed`, `Failed` |
 | ProcessorBatchId | int FK | ATM, POS, or Interchange batch, depending on function |
@@ -75,7 +75,7 @@ Adding a scheme/CMS = new adapter class + one row here; no engine changes.
 | Name / Scheme / Cms | string(100)/50/50 | e.g. `Mastercard — BankOne`; unique (Scheme, Cms) |
 | TransactionAdapterCode | string(100) | `ITransactionAdapter.Code` for CMS files |
 | GlcAdapterCode | string(100) | `IGlcAdapter.Code` for GL files |
-| Functions | string(200) | `;`-separated enabled functions, e.g. `AtmToGl;PosToGl;InterchangeToGl;NetworkToAtm` |
+| Functions | string(200) | `;`-separated enabled functions; Mastercard: `PosToGl;InterchangeToGl;NetworkToAtm` |
 | MatchThresholdOverride / DateToleranceDaysOverride | decimal(5,2) / int null | sparse overrides; null = inherit global `MatchWeights` |
 | IsActive | bit | inactive profiles hide their scheme from navigation |
 | audit cols | | IAuditable |
@@ -187,7 +187,7 @@ sheet row 3 (title row 1, blank row 2).
 |---|---|---|---|
 | StgInterchangeFeeId | — | int PK | |
 | ImportBatchId / SourceRowNumber | — | int | |
-| MicrofilmRefNumber | MICROFILM REF NUMBER | string(24) | |
+| MicrofilmRefNumber | MICROFILM REF NUMBER | string(24) | **Credit-card GL match key**; used instead of `ReferenceNumber` |
 | MicrofilmRefSeq | MICROFILM REF SEQ | int | |
 | ReferenceNumber | REFERENCE NUMBER | char(12) | **join key**, indexed |
 | CardNumberHashed | CARD NUMBER | string(48) | hashed |
@@ -197,7 +197,7 @@ sheet row 3 (title row 1, blank row 2).
 | CardAccountNumber | CARD ACCOUNT NUMBER | string(24) | |
 | TransactionDate | TRANSACTION DATE | datetime2 | |
 | ProcessingDate | PROCESSING DATE | date | |
-| TransactionCode | TRANSACTION CODE | string(4) | `01`=purchase, `04`=cash |
+| TransactionCode | TRANSACTION CODE | string(4) | part of transaction identity: `01`=purchase, `04`=cash, `09`=credit |
 | TransactionWording | TRANSACTION WORDING | string(64) | |
 | TxnAmount / TxnCcy | TRANSACTION AMOUNT / CURRENCY | decimal / int | |
 | BillingAmount / BillingCcy | BILLING AMOUNT / CURRENCY | decimal / int | |
@@ -226,7 +226,7 @@ Finacle general-ledger postings. `RefNum` is populated on only ~2.7k rows, so GL
 | TranDate | TRAN_DATE | date | indexed |
 | TranId | TRAN_ID | string(16) | |
 | RefNum | REF_NUM | string(24) null | `NULL` string → null |
-| TranParticular / TranParticular2 | TRAN_PARTICULAR(_2) | string(128) | |
+| TranParticular / TranParticular2 | TRAN_PARTICULAR(_2) | string(128) | credit matching uses `TranParticular2` from character 13 onward; the first twelve prefix characters are ignored |
 | Debit | DEBIT | decimal(19,4) | |
 | Credit | CREDIT | decimal(19,4) | |
 | TranAmt | TRAN_AMT | decimal(19,4) | |
@@ -266,6 +266,10 @@ One processor-to-GL outcome for the three GL-backed functions. The standalone Ne
 |---|---|---|
 | ReconMatchId | int PK | |
 | ReconRunId | int FK | |
+| ReferenceNumber | string null | original processor `REFERENCE_NUMBER` (shown for review; debit match key) |
+| MicrofilmRefNumber | string null | original processor `MICROFILM REF NUMBER` (credit match key) |
+| GlParticular2 | string null | analyst comparison value: debit `TRAN_PARTICULAR_2` unchanged; credit `TRAN_PARTICULAR_2.Substring(12)` |
+| GlReference | string null | normalized GL match key, equal to `GlParticular2` for current Mastercard rules |
 | Pass | enum tinyint | `NetworkVsProcessor`, `ProcessorCompleteness`, `ProcessorVsGl` |
 | ReferenceNumber | char(12) null | null for GL total-level rows |
 | LeftStagingId / LeftSource | int / enum | e.g. T464 row |

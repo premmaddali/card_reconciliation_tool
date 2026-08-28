@@ -1,4 +1,5 @@
 @page "/analysis"
+@page "/analysis/{RunId:int}"
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @using Microsoft.EntityFrameworkCore
 @using Recon.Web.Domain.Import
@@ -9,24 +10,34 @@
 <PageHeader Title="Advanced analysis" Subtitle="Explore a completed reconciliation with server-side sorting and advanced column filters" Eyebrow="Reconciliation" Icon="bulk"
             Breadcrumbs="@(new[] { "Reconciliation", "Advanced analysis" })" />
 
+@if (!RunId.HasValue)
+{
 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-    <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Completed reconciliation batches</label>
+    <div class="mb-4 flex flex-wrap items-end justify-between gap-4">
+        <div><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Completed reconciliation batches</label><p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Choose a batch to open its detailed analysis.</p></div>
+        <div class="w-full sm:w-60"><label for="analysis-period" class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">Period</label><select id="analysis-period" @bind="_periodFilter" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900"><option value="">All periods</option>@foreach (var period in _periods) { <option value="@period">@period</option> }</select></div>
+    </div>
     <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
         <table class="min-w-full text-left text-sm"><thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400"><tr><th class="px-4 py-3">Batch</th><th class="px-4 py-3">Period</th><th class="px-4 py-3">Created</th><th class="px-4 py-3 text-right">Action</th></tr></thead><tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-        @foreach (var batch in _batches)
+        @foreach (var batch in FilteredBatches)
         {
-            <tr class="@(batch.RunId == _activeRunId ? "bg-primary-50 dark:bg-primary-950/30" : "")"><td class="px-4 py-3 font-medium">#@batch.RunId · @batch.Function</td><td class="px-4 py-3">@batch.Period</td><td class="px-4 py-3">@batch.Created.ToString("dd MMM yyyy HH:mm")</td><td class="px-4 py-3 text-right"><button type="button" @onclick="() => OpenBatch(batch.RunId)" class="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700">Open analysis</button></td></tr>
+            <tr><td class="px-4 py-3 font-medium">#@batch.RunId · @batch.Function</td><td class="px-4 py-3">@batch.Period</td><td class="px-4 py-3">@batch.Created.ToString("dd MMM yyyy HH:mm")</td><td class="px-4 py-3 text-right"><a href="@($"/analysis/{batch.RunId}")" class="inline-block rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700">Open analysis</a></td></tr>
         }
         </tbody></table>
     </div>
-    @if (_activeRunId.HasValue)
-    {
-        <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">Use each column’s filter button to combine rules such as “transaction date after”, “confidence greater than”, or “difference less than”. Only the requested page is loaded from the database.</p>
-    }
+    @if (!FilteredBatches.Any()) { <p class="py-6 text-center text-sm text-gray-500 dark:text-gray-400">No completed batches found for this period.</p> }
 </div>
+}
 
-@if (_activeRunId.HasValue)
+@if (RunId.HasValue)
 {
+    <div class="mt-6 flex items-center justify-between gap-4"><p class="text-sm text-gray-600 dark:text-gray-300">Use each column’s filter button to combine rules such as “transaction date after”, “confidence greater than”, or “difference less than”. Only the requested page is loaded from the database.</p><a href="/analysis" class="shrink-0 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700">Back to batches</a></div>
+    <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard Label="Matched" Value="@_analysisSummary.ExactMatched.ToString("N0")" Hint="Exact amount matches" Accent="green"><Icon><CheckCircleIcon Class="h-5 w-5" /></Icon></StatCard>
+        <StatCard Label="Matched with tolerance" Value="@_analysisSummary.ToleranceMatched.ToString("N0")" Hint="Within the run's selected tolerance" Accent="violet"><Icon><CheckCircleIcon Class="h-5 w-5" /></Icon></StatCard>
+        <StatCard Label="Amount mismatch" Value="@_analysisSummary.AmountMismatch.ToString("N0")" Hint="Reference found, amount outside tolerance" Accent="amber"><Icon><ExclamationTriangleIcon Class="h-5 w-5" /></Icon></StatCard>
+        <StatCard Label="No GL match" Value="@_analysisSummary.NoGlMatch.ToString("N0")" Hint="Processor transactions without a GL match" Accent="red"><Icon><ExclamationTriangleIcon Class="h-5 w-5" /></Icon></StatCard>
+    </div>
     <div class="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="overflow-x-auto p-2">
             <RadzenDataGrid @key="_activeRunId" @ref="_grid" TItem="AnalysisRow" Data="@_rows" Count="@_rowCount" LoadData="@LoadData"
@@ -36,6 +47,8 @@
                 <Columns>
                     <RadzenDataGridColumn TItem="AnalysisRow" Property="Result" Title="Result" Width="155px" />
                     <RadzenDataGridColumn TItem="AnalysisRow" Property="ReferenceNumber" Title="Reference" Width="145px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="MicrofilmRefNumber" Title="Microfilm" Width="170px" />
+                    <RadzenDataGridColumn TItem="AnalysisRow" Property="GlParticular2" Title="TRAN_PARTICULAR_2" Width="180px" />
                     <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorTransactionDateTime" Title="Transaction date / time" Width="185px" FormatString="{0:dd MMM yyyy HH:mm}" />
                     <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorAccountNumber" Title="Processor account" Width="155px" />
                     <RadzenDataGridColumn TItem="AnalysisRow" Property="ProcessorProductType" Title="Card type" Width="120px">
@@ -99,12 +112,21 @@
 
 @code {
     private sealed class BatchChoice { public int RunId { get; init; } public string Function { get; init; } = ""; public string Period { get; init; } = ""; public DateTime Created { get; init; } }
+    private sealed class AnalysisSummary
+    {
+        public int ExactMatched { get; init; }
+        public int ToleranceMatched { get; init; }
+        public int AmountMismatch { get; init; }
+        public int NoGlMatch { get; init; }
+    }
 
     private sealed class AnalysisRow
     {
         public int ReconMatchId { get; init; }
         public string Result { get; init; } = "";
         public string? ReferenceNumber { get; init; }
+        public string? MicrofilmRefNumber { get; init; }
+        public string? GlParticular2 { get; init; }
         public DateTime? ProcessorTransactionDateTime { get; init; }
         public string? ProcessorAccountNumber { get; init; }
         public string? ProcessorProductType { get; init; }
@@ -133,34 +155,46 @@
     }
 
     private List<BatchChoice> _batches = [];
-    private int? _selectedRunId, _activeRunId;
+    private List<string> _periods = [];
+    private string _periodFilter = "";
+    private int? _activeRunId;
     private RadzenDataGrid<AnalysisRow>? _grid;
     private IEnumerable<AnalysisRow> _rows = [];
     private int _rowCount;
     private bool _loading;
     private bool _reloadGridAfterRender;
     private AnalysisRow? _evidence;
+    private AnalysisSummary _analysisSummary = new();
+
+    [Parameter] public int? RunId { get; set; }
+
+    private IEnumerable<BatchChoice> FilteredBatches => string.IsNullOrWhiteSpace(_periodFilter)
+        ? _batches
+        : _batches.Where(batch => batch.Period == _periodFilter);
 
     protected override async Task OnInitializedAsync()
     {
+        if (RunId.HasValue) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        var runs = await db.ReconRuns.AsNoTracking().Where(r => r.Status == ReconRunStatus.Completed)
+        var runs = await db.ReconRuns.AsNoTracking().Where(r => r.Status == ReconRunStatus.Completed && !r.IsArchived)
             .OrderByDescending(r => r.CreatedDate).Take(100).ToListAsync();
         _batches = runs.Select(r => new BatchChoice
         {
             RunId = r.ReconRunId,
             Function = FunctionName(r.Function), Period = r.PeriodKey, Created = r.CreatedDate
         }).ToList();
+        _periods = _batches.Select(batch => batch.Period).Distinct().OrderByDescending(period => period).ToList();
     }
 
-    private Task OpenBatch(int runId)
+    protected override Task OnParametersSetAsync()
     {
-        _selectedRunId = runId;
-        _activeRunId = runId;
+        if (!RunId.HasValue || _activeRunId == RunId) return Task.CompletedTask;
+        _activeRunId = RunId;
         _rows = [];
         _rowCount = 0;
+        _analysisSummary = new();
         _reloadGridAfterRender = true;
-        return Task.CompletedTask;
+        return LoadSummary(RunId.Value);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -182,8 +216,10 @@
                 .Select(m => new AnalysisRow
                 {
                     ReconMatchId = m.ReconMatchId,
-                    Result = m.MatchStatus == MatchStatus.Matched ? "Matched" : m.MatchStatus == MatchStatus.AmountMismatch ? "Amount mismatch" : m.MatchStatus == MatchStatus.UnmatchedProcessor ? "No GL match" : "Other",
+                    Result = m.MatchStatus == MatchStatus.Matched && m.MatchComment != null && m.MatchComment.StartsWith("Tolerance applied:") ? "Matched with tolerance" : m.MatchStatus == MatchStatus.Matched ? "Matched" : m.MatchStatus == MatchStatus.AmountMismatch ? "Amount mismatch" : m.MatchStatus == MatchStatus.UnmatchedProcessor ? "No GL match" : "Other",
                     ReferenceNumber = m.ReferenceNumber,
+                    MicrofilmRefNumber = m.MicrofilmRefNumber,
+                    GlParticular2 = m.GlParticular2,
                     ProcessorTransactionDateTime = m.ProcessorTransactionDateTime,
                     ProcessorAccountNumber = m.ProcessorAccountNumber,
                     ProcessorProductType = m.ProcessorProductType,
@@ -219,6 +255,23 @@
             _rows = await query.Skip(args.Skip ?? 0).Take(args.Top ?? 50).ToListAsync();
         }
         finally { _loading = false; }
+    }
+
+    private async Task LoadSummary(int runId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var counts = await db.ReconMatches.AsNoTracking()
+            .Where(m => m.ReconRunId == runId)
+            .GroupBy(m => 1)
+            .Select(g => new AnalysisSummary
+            {
+                ExactMatched = g.Count(m => m.MatchStatus == MatchStatus.Matched && (m.MatchComment == null || !m.MatchComment.StartsWith("Tolerance applied:"))),
+                ToleranceMatched = g.Count(m => m.MatchStatus == MatchStatus.Matched && m.MatchComment != null && m.MatchComment.StartsWith("Tolerance applied:")),
+                AmountMismatch = g.Count(m => m.MatchStatus == MatchStatus.AmountMismatch),
+                NoGlMatch = g.Count(m => m.MatchStatus == MatchStatus.UnmatchedProcessor)
+            })
+            .FirstOrDefaultAsync();
+        _analysisSummary = counts ?? new AnalysisSummary();
     }
 
     private static string FunctionName(ReconFunction function) => function switch

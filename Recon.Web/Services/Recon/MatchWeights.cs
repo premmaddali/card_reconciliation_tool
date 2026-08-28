@@ -9,8 +9,7 @@ public class MatchWeights
 {
     public const string SectionName = "MatchWeights";
 
-    // Defaults: amount + date alone (45 + 33 = 78) clear the threshold, so ATM — which rarely carries
-    // a usable reference — still matches on amount and date. Reference/channel push confidence higher.
+    // Defaults: amount + date alone (45 + 33 = 78) clear the threshold. Reference/channel push confidence higher.
     // Card and Time are reserved (0): the GL cardholder rows carry neither, so they cannot be scored yet.
     public decimal Amount { get; set; } = 45m;
     public decimal Date { get; set; } = 33m;
@@ -26,7 +25,7 @@ public class MatchWeights
 
     /// <summary>Date-decay window (days). Same day = full Date weight; beyond this = 0.</summary>
     public int DateToleranceDays { get; set; } = 2;
-    /// <summary>Wider window for ATM, where settlement timestamps drift.</summary>
+    /// <summary>Reserved for a future ATM GL source; ATM currently reconciles only to T464.</summary>
     public int AtmDateToleranceDays { get; set; } = 4;
 
     /// <summary>Minimum confidence for an amount-based pair to be accepted as a match.</summary>
