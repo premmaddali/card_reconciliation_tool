@@ -12,7 +12,9 @@ New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 if (Test-Path -LiteralPath $pidFile) {
     $existingPid = Get-Content -LiteralPath $pidFile -Raw
     if ($existingPid -match '^\d+$' -and (Get-Process -Id ([int]$existingPid) -ErrorAction SilentlyContinue)) {
-        Write-Host "ReconTool is already running (PID $existingPid)."
+        Write-Host "ReconTool is already running (PID $existingPid, port 5104)."
+        Write-Host "URL: http://localhost:5104"
+        Write-Host "Logs: $stdoutLog"
         exit 0
     }
     Remove-Item -LiteralPath $pidFile -Force
@@ -21,6 +23,7 @@ if (Test-Path -LiteralPath $pidFile) {
 $listener = Get-NetTCPConnection -State Listen -LocalPort 5104 -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($listener) {
     Write-Host "Port 5104 is already in use (PID $($listener.OwningProcess))."
+    Write-Host "URL: http://localhost:5104 (verify that the existing service is ReconTool)."
     exit 0
 }
 
@@ -48,6 +51,6 @@ if ($null -eq $webPid) {
 }
 
 Set-Content -LiteralPath $pidFile -Value $webPid -NoNewline
-Write-Host "ReconTool started (PID $webPid)."
-Write-Host "Open http://localhost:5104 once startup completes."
+Write-Host "ReconTool started (PID $webPid, port 5104)."
+Write-Host "URL: http://localhost:5104"
 Write-Host "Logs: $stdoutLog"

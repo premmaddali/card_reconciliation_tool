@@ -5,6 +5,7 @@ using Recon.Web.Domain.Recon;
 using Recon.Web.Domain.Staging;
 using Recon.Web.Platform.Files;
 using Recon.Web.Platform.Model;
+using Recon.Web.Services.Recon;
 
 namespace Recon.Web.Platform.Adapters;
 
@@ -43,9 +44,6 @@ public sealed class DbContextStagingSink(AppDbContext db) : IStagingSink
 /// </summary>
 public static class NormalizedProjection
 {
-    /// <summary>The account-currency convention of the BankOne cardholder GL accounts: MUR-posted amounts.</summary>
-    private const int GlPostingCurrency = 480;
-
     public static async Task<int> ProjectBatchAsync(AppDbContext db, int importBatchId, CancellationToken ct = default)
     {
         var batch = await db.ImportBatches.FindAsync([importBatchId], ct)
@@ -221,9 +219,9 @@ public static class NormalizedProjection
                 Account = g.AcctNum,
                 PostingDate = g.TranDate,
                 PostingDateTime = g.EntryDate ?? g.VfdDate,
-                // Cardholder accounts are denominated per card currency but post in MUR.
+                // Use the currency of the posting; account denomination is separate.
                 Amount = Math.Abs(g.TranAmt ?? 0m),
-                Currency = GlPostingCurrency,
+                Currency = MatchingEvidence.GlCurrency(g.TranCcyCode),
                 // Preserve the complete GL particular. The engine derives the credit match key by
                 // removing its first twelve-character BankOne posting prefix.
                 Reference = g.TranParticular2?.Trim(),
@@ -245,7 +243,7 @@ public static class NormalizedProjection
     private static string? CombineDescription(string? particular, string? rmks)
     {
         var p = particular?.Trim();
-        var r = rmks?.Trim();
+        var r = CardIdentity.Display(rmks)?.Trim();
         if (string.IsNullOrEmpty(p)) return string.IsNullOrEmpty(r) ? null : r;
         return string.IsNullOrEmpty(r) ? p : $"{p} {r}";
     }

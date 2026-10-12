@@ -61,11 +61,14 @@ public class ReconMatch
     public DateTime? ProcessorTransactionDateTime { get; set; }
 
     // GL side (null when unmatched)
+    public int? GlSourceBatchId { get; set; }
+    public bool MatchedAcrossPeriods { get; set; }
     public int? GlStagingId { get; set; }
     public decimal? GlAmount { get; set; }
     /// <summary>Actual posting currency of the GL amount (the cardholder settlement GL is posted in MUR).</summary>
     public int? GlCcy { get; set; }
     public DateOnly? GlDate { get; set; }
+    public DateOnly? GlValueDate { get; set; }
     /// <summary>GL entry/verification timestamp where the GL export provides it.</summary>
     public DateTime? GlPostingDateTime { get; set; }
 

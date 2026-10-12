@@ -107,6 +107,7 @@ public sealed class BankOneInterchangeAdapter : ITransactionAdapter
                 MicrofilmRefSeq = ValueParsers.Int(BankOne.Cell(row, h, "MICROFILM REF SEQ")),
                 ReferenceNumber = ValueParsers.Clean(BankOne.Cell(row, h, "REFERENCE NUMBER")),
                 CardNumberHashed = ValueParsers.Clean(BankOne.Cell(row, h, "CARD NUMBER")),
+                CardAccountEntityId = Recon.Web.Services.Recon.CardIdentity.FromSource(BankOne.Cell(row, h, "CARD ACCOUNT ENTITY ID")),
                 ProductCode = ValueParsers.Clean(BankOne.Cell(row, h, "PRODUCT CODE")),
                 ProductType = ValueParsers.Clean(BankOne.Cell(row, h, "PRODUCT TYPE")),
                 ClientCode = ValueParsers.Clean(BankOne.Cell(row, h, "CLIENT CODE")),

@@ -21,9 +21,9 @@ namespace Recon.Web.Tests;
 public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
 {
     private static readonly string Shared =
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "SharedFiles", "SharedFiles (5)"));
+        Path.Combine(SampleFiles.Root, "SharedFiles (5)");
     private static readonly string SharedRoot =
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "SharedFiles"));
+        SampleFiles.Root;
 
     private readonly string _dbName = "Recon_Eng_" + Guid.NewGuid().ToString("N")[..8];
     private ServiceProvider _sp = null!;
@@ -71,7 +71,7 @@ public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Foreign_transaction_matches_GL_using_billing_amount_with_MUR_posting_currency()
+    public async Task Foreign_transaction_matches_GL_using_billing_amount_and_recorded_currency()
     {
         await using var db = await Factory.CreateDbContextAsync();
         var processorBatch = new ImportBatch
@@ -97,7 +97,7 @@ public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
         db.StgGlEntries.Add(new StgGlEntry
         {
             ImportBatchId = glBatch.ImportBatchId, AcctNum = "9849065773", TranDate = date,
-            TranAmt = 160m, TranParticular = "POS/FX", TranParticular2 = "FXREF0000001"
+            TranAmt = 160m, TranCcyCode = "USD", TranParticular = "POS/FX", TranParticular2 = "FXREF0000001"
         });
         await db.SaveChangesAsync();
 
@@ -108,7 +108,7 @@ public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
         var match = await db.ReconMatches.SingleAsync(x => x.ReconRunId == result.ReconRunId);
         Assert.Equal(125m, match.ProcessorAmount);              // original GBP transaction value
         Assert.Equal(160m, match.ReconciliationAmount);         // billing value matched to the GL
-        Assert.Equal(480, match.Ccy);                           // the GL amount is posted as MUR
+        Assert.Equal(840, match.Ccy);                           // preserve the recorded USD posting currency
         Assert.Equal(100m, match.Confidence);
         Assert.Contains("amount agrees", match.ScoreBreakdown);
     }

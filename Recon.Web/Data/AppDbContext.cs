@@ -23,6 +23,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     // Import & run control
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<ReconRun> ReconRuns => Set<ReconRun>();
+    public DbSet<ReconPeriodRun> ReconPeriodRuns => Set<ReconPeriodRun>();
     public DbSet<ReconParameters> ReconParameters => Set<ReconParameters>();
     public DbSet<BatchArchive> BatchArchives => Set<BatchArchive>();
     public DbSet<BatchArchiveTransaction> BatchArchiveTransactions => Set<BatchArchiveTransaction>();
@@ -40,6 +41,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ReconException> ReconExceptions => Set<ReconException>();
     public DbSet<ReconExceptionComment> ReconExceptionComments => Set<ReconExceptionComment>();
     public DbSet<ReconPassSummary> ReconPassSummaries => Set<ReconPassSummary>();
+    public DbSet<ReconRunPass> ReconRunPasses => Set<ReconRunPass>();
     public DbSet<AtmNetworkValidation> AtmNetworkValidations => Set<AtmNetworkValidation>();
     public DbSet<ReconWorkflowDefinition> ReconWorkflowDefinitions => Set<ReconWorkflowDefinition>();
     public DbSet<ReconWorkflowStep> ReconWorkflowSteps => Set<ReconWorkflowStep>();

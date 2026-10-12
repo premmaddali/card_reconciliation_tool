@@ -105,6 +105,63 @@ public class ImportPipelineTests : IAsyncLifetime
         Assert.Equal(1, await db.ImportBatches.CountAsync());
     }
 
+    [Theory]
+    [InlineData("3-INTERCHANGE_FEE_REPORT_CREDIT_AND_DEBIT (1).xlsx", "605827366477", 335, 480, 335, 480)]
+    [InlineData("April 2023.xlsx", "311714987036", 10000, 480, 220, 840)]
+    public async Task Interchange_export_versions_detect_and_map_the_same_columns(string fileName, string reference, decimal amount, int currency, decimal settlement, int settlementCurrency)
+    {
+        var outcome = await Import("SharedFiles (5)/" + fileName);
+        Assert.True(outcome.Success, outcome.Error);
+        Assert.Equal(SourceType.InterchangeFee, outcome.DetectedType);
+        Assert.True(outcome.RowCount > 80000);
+        await using var db = await _sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync();
+        Assert.Equal(outcome.RowCount, await db.StgInterchangeFees.CountAsync());
+        Assert.Empty(await db.StgDebitSettlements.ToListAsync());
+        var first = await db.StgInterchangeFees.OrderBy(x => x.SourceRowNumber).FirstAsync();
+        Assert.Equal(reference, first.ReferenceNumber);
+        Assert.NotNull(first.MicrofilmRefNumber);
+        Assert.NotNull(first.CardAccountNumber);
+        Assert.NotNull(first.TransactionDate);
+        Assert.NotNull(first.ProductType);
+        Assert.Equal(amount, first.TxnAmount);
+        Assert.Equal(currency, first.TxnCcy);
+        Assert.Equal(settlement, first.SettlementAmount);
+        Assert.Equal(settlementCurrency, first.SettlementCcy);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Csv_interchange_accepts_both_header_styles_even_with_atm_wording(bool underscores)
+    {
+        var header = "MICROFILM REF NUMBER,INTERCHANGE FEES,INTERCHANGE FEES SIGN,MERCHANT ACRONYM,SETTLEMENT AMOUNT,TRANSACTION WORDING,REFERENCE NUMBER,TRANSACTION AMOUNT,TRANSACTION CURRENCY";
+        if (underscores) header = header.Replace(' ', '_');
+        var csv = header + "\n12345,1.25,D,Merchant,99,ATM WITHDRAWAL,ABC123,99,480\n";
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
+        var svc = _sp.GetRequiredService<IImportService>();
+        var outcome = await svc.ImportAsync(stream, "interchange.csv", "2023-04");
+        Assert.True(outcome.Success, outcome.Error);
+        Assert.Equal(SourceType.InterchangeFee, outcome.DetectedType);
+        Assert.Equal(1, outcome.RowCount);
+        await using var db = await _sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync();
+        var row = await db.StgInterchangeFees.SingleAsync();
+        Assert.Equal("ABC123", row.ReferenceNumber);
+        Assert.Equal(99m, row.TxnAmount);
+        Assert.Equal(-1.25m, row.InterchangeFees);
+    }
+
+    [Theory]
+    [InlineData("MERCHANT_ACRONYM,SETTLEMENT_AMOUNT,TRANSACTION_WORDING,REFERENCE_NUMBER", "Shop,12,PURCHASE,REF1", SourceType.PosSettlement)]
+    [InlineData("MERCHANT_ACRONYM,SETTLEMENT_AMOUNT,TRANSACTION_WORDING,REFERENCE_NUMBER", "ATM,12,ATM WITHDRAWAL,REF1", SourceType.AtmSettlement)]
+    [InlineData("SOL_ID,GL_SUB_HEAD_CODE,FORACID,TRAN_AMT", "1,2,123,12", SourceType.GlDump)]
+    public async Task Csv_other_source_signatures_remain_distinct(string header, string data, SourceType expected)
+    {
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(header + "\n" + data + "\n"));
+        var outcome = await _sp.GetRequiredService<IImportService>().ImportAsync(stream, "sample.csv", "2023-04");
+        Assert.True(outcome.Success, outcome.Error);
+        Assert.Equal(expected, outcome.DetectedType);
+        Assert.Equal(1, outcome.RowCount);
+    }
     private sealed class TestCurrentUser : ICurrentUserService
     {
         public Guid UserId => CurrentUserService.SystemUserId;

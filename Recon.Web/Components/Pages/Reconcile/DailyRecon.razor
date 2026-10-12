@@ -1,0 +1,168 @@
+@page "/recon/daily"
+@attribute [Authorize]
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.Recon.DailyReconService Daily
+@inject Recon.Web.Services.IPermissionService Permissions
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+@using Recon.Web.Services.Recon
+
+<PageTitle>Daily / period recon · Recon Tool</PageTitle>
+<PageHeader Title="Daily / period reconciliation" Subtitle="Reconcile a month day by day (or any date range). Each load also reconciles pending transactions left unmatched by earlier loads." Eyebrow="Reconciliation" Icon="bulk"
+            Breadcrumbs="@(new[] { "Reconciliation", "Daily / period recon" })" />
+
+<div class="grid gap-6 lg:grid-cols-5">
+    <div class="lg:col-span-2">
+        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <h2 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">New month</h2>
+            <p class="mb-4 text-xs text-gray-500 dark:text-gray-400">A month container holds the date-range runs you load beneath it. It holds no files of its own — add runs (a day, two days, a whole month) inside it.</p>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Month</label>
+            <input type="month" value="@_month" @onchange="e => _month = e.Value?.ToString() ?? _month" class="mb-4 w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+            @if (_error is not null)
+            {
+                <div class="mb-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-300">
+                    <ExclamationTriangleIcon Class="mt-0.5 h-4 w-4 shrink-0" /><span>@_error</span>
+                </div>
+            }
+            <button type="button" @onclick="CreateMonth" disabled="@_busy"
+                    class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:opacity-50">
+                Create month
+            </button>
+        </div>
+    </div>
+
+    <div class="lg:col-span-3">
+        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <div class="border-b border-gray-200 px-5 py-3 dark:border-gray-700"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Month containers (Bulk)</h2></div>
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <th class="px-5 py-2.5 font-semibold">Month</th>
+                        <th class="px-5 py-2.5 text-right font-semibold">Runs</th>
+                        <th class="px-5 py-2.5 font-semibold">Status</th>
+                        <th class="px-5 py-2.5 font-semibold">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                    @if (_containers.Count == 0)
+                    {
+                        <tr><td colspan="4" class="px-5 py-10 text-center text-gray-500 dark:text-gray-400">No months yet — create one on the left.</td></tr>
+                    }
+                    @foreach (var c in _containers)
+                    {
+                        <tr @key="c.Id" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40" @onclick="() => Open(c.Id)">
+                            <td class="px-5 py-3 font-semibold text-primary-700 dark:text-primary-300">@c.PeriodKey</td>
+                            <td class="px-5 py-3 text-right tabular-nums text-gray-700 dark:text-gray-200">@c.Runs</td>
+                            <td class="px-5 py-3"><span class="rounded-full px-2 py-0.5 text-xs font-semibold @(c.Status == ReconPeriodRunStatus.Open ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300")">@(c.Status == ReconPeriodRunStatus.Open ? "Open" : "Rolled up")</span></td>
+                            <td class="px-5 py-3 text-xs text-gray-500 dark:text-gray-400">@c.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (_canOrphan)
+{
+    <div class="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-5 py-3 dark:border-gray-700">
+            <div>
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Reconcile long-outstanding transactions (all months)</h2>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">A final pass across every completed month to reconcile transactions still pending from any earlier period, matched by exact reference number with no date limit. Transactions without a reference are left for manual review.</p>
+            </div>
+            <button type="button" @onclick="RunOrphan" disabled="@_orphanBusy"
+                    class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:opacity-50">
+                @if (_orphanBusy) { <RefreshIcon Class="h-4 w-4 animate-spin" /> }<span>Reconcile long-outstanding</span>
+            </button>
+        </div>
+        @if (_orphanResult is not null)
+        {
+            <div class="px-5 py-4">
+                <p class="text-sm font-semibold text-gray-900 dark:text-white">Reconciled @_orphanResult.Added transaction(s) across @_orphanResult.BatchesInScope month(s)@(_orphanResult.Ambiguous > 0 ? $", {_orphanResult.Ambiguous} need review" : "").</p>
+                @if (_orphanResult.Changes.Count > 0)
+                {
+                    <table class="mt-3 w-full text-left text-sm">
+                        <thead class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400"><tr class="border-b border-gray-100 dark:border-gray-700"><th class="py-2 font-semibold">Month</th><th class="py-2 text-right font-semibold">Transactions reconciled</th></tr></thead>
+                        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                            @foreach (var c in _orphanResult.Changes)
+                            {
+                                <tr @key="c.RunId"><td class="py-2 text-gray-700 dark:text-gray-200">@c.RangeLabel</td><td class="py-2 text-right tabular-nums font-semibold text-primary-700 dark:text-primary-300">@c.Added.ToString("N0")</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else { <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Nothing left to resolve.</p> }
+            </div>
+        }
+        @if (_orphanError is not null)
+        {
+            <p class="px-5 py-3 text-sm text-red-700 dark:text-red-300">@_orphanError</p>
+        }
+    </div>
+}
+
+@code {
+    private record Row(int Id, string PeriodKey, int Runs, ReconPeriodRunStatus Status, DateTime Created);
+    private string _month = DateTime.Today.ToString("yyyy-MM");
+    private bool _busy;
+    private string? _error;
+    private List<Row> _containers = [];
+    private bool _canOrphan, _orphanBusy;
+    private OrphanSweepResult? _orphanResult;
+    private string? _orphanError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState.GetAuthenticationStateAsync()).User;
+        if (Guid.TryParse(user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid))
+        {
+            var grants = await Permissions.GetGrantsAsync(uid);
+            _canOrphan = grants.TryGetValue("BULKRECON", out var g) && g.CanView && g.CanEdit;
+        }
+        await Load();
+    }
+
+    private async Task RunOrphan()
+    {
+        _orphanError = null; _orphanBusy = true;
+        try { _orphanResult = await Daily.OrphanSweepAsync(); }
+        catch (Exception ex) { _orphanError = ex.Message; }
+        finally { _orphanBusy = false; }
+    }
+
+    private async Task Load()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _containers = await db.ReconPeriodRuns
+            .Where(c => c.Function == ReconFunction.InterchangeToGl && c.SchemeProfileId == null)
+            .OrderByDescending(c => c.CreatedDate)
+            .Select(c => new Row(c.ReconPeriodRunId, c.PeriodKey,
+                db.ReconRuns.Count(r => r.ParentPeriodRunId == c.ReconPeriodRunId), c.Status, c.CreatedDate))
+            .ToListAsync();
+    }
+
+    private async Task CreateMonth()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_month) || _month.Length != 7) { _error = "Choose a month."; return; }
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var existing = await db.ReconPeriodRuns.FirstOrDefaultAsync(c => c.Function == ReconFunction.InterchangeToGl && c.SchemeProfileId == null && c.PeriodKey == _month);
+            if (existing is not null) { Open(existing.ReconPeriodRunId); return; }
+            var container = new ReconPeriodRun { Function = ReconFunction.InterchangeToGl, PeriodKey = _month, Status = ReconPeriodRunStatus.Open };
+            db.ReconPeriodRuns.Add(container);
+            await db.SaveChangesAsync();
+            Open(container.ReconPeriodRunId);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private void Open(int id) => Nav.NavigateTo($"/recon/daily/{id}");
+}

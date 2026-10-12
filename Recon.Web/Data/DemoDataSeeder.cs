@@ -17,6 +17,8 @@ public static class DemoDataSeeder
 {
     public static async Task SeedAsync(IServiceProvider services)
     {
+        // Reference/identity seeds always run; synthetic transactions are opt-in only.
+        if (!services.GetRequiredService<IConfiguration>().GetValue<bool>("DemoData:Enabled")) return;
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await using var _ = db; // keep alive for the whole seed

@@ -40,7 +40,7 @@ public sealed class BankOneGlAdapter : IGlcAdapter
                 TranParticularCode = ValueParsers.Clean(h.Cell(row, "TRAN_PARTICULAR_CODE")),
                 Debit = ValueParsers.Amount(h.Cell(row, "DEBIT")),
                 Credit = ValueParsers.Amount(h.Cell(row, "CREDIT")),
-                TranRmks = ValueParsers.Clean(h.Cell(row, "TRAN_RMKS")),
+                TranRmks = Recon.Web.Services.Recon.CardIdentity.ImportRemarks(h.Cell(row, "TRAN_RMKS")),
                 TranAmt = ValueParsers.Amount(h.Cell(row, "TRAN_AMT")),
                 TranCcyCode = ValueParsers.Clean(h.Cell(row, "TRAN_CRNCY_CODE")),
                 EntryUserId = ValueParsers.Clean(h.Cell(row, "ENTRY_USER_ID")),

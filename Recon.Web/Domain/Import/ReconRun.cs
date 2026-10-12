@@ -28,12 +28,30 @@ public enum ReconVerificationStatus : byte
 }
 
 /// <summary>
+/// The date width a run covers. <see cref="Month"/> is the classic standalone monthly batch and the
+/// default for every existing run. <see cref="Day"/>/<see cref="Range"/> are date-range children of a
+/// <see cref="Recon.Web.Domain.Recon.ReconPeriodRun"/> month container (daily/period reconciliation).
+/// </summary>
+public enum PeriodGranularity : byte
+{
+    Month = 0,
+    Day = 1,
+    Range = 2
+}
+
+/// <summary>
 /// One reconciliation execution: a processor batch matched against a GL batch for a period,
 /// under one <see cref="ReconFunction"/>. Owns the produced matches, exceptions and summaries.
 /// </summary>
 public class ReconRun : IAuditable
 {
     public int ReconRunId { get; set; }
+    public bool IsAdjacentPeriodRun { get; set; }
+    public int? SecondaryOfRunId { get; set; }
+    /// <summary>Source run for a separately auditable card-identity pass.</summary>
+    public int? CardOfRunId { get; set; }
+    public int SecondaryMatchCount { get; set; }
+    public int SecondaryAmbiguousCount { get; set; }
     public ReconFunction Function { get; set; }
     public string PeriodKey { get; set; } = string.Empty;
     /// <summary>The batch's reconciliation date range (duplicate detection is per function + range).</summary>
@@ -52,6 +70,14 @@ public class ReconRun : IAuditable
     public ImportBatch? NetworkBatch { get; set; }
     /// <summary>Scheme this run belongs to (null = legacy/unassigned Mastercard data).</summary>
     public int? SchemeProfileId { get; set; }
+
+    /// <summary>
+    /// The month container for daily/period reconciliation. Null = a classic standalone run (every
+    /// existing run), which keeps all current behaviour.
+    /// </summary>
+    public int? ParentPeriodRunId { get; set; }
+    /// <summary>Date width this run covers. Default <see cref="PeriodGranularity.Month"/> = classic batch.</summary>
+    public PeriodGranularity PeriodGranularity { get; set; } = PeriodGranularity.Month;
 
     public DateTime? StartedDate { get; set; }
     public DateTime? CompletedDate { get; set; }

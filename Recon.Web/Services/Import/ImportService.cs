@@ -12,7 +12,7 @@ using Recon.Web.Services.Parsing;
 
 namespace Recon.Web.Services.Import;
 
-public record ImportOutcome(bool Success, SourceType? DetectedType, int RowCount, string? Error, bool Duplicate = false, int? ImportBatchId = null);
+public record ImportOutcome(bool Success, SourceType? DetectedType, int RowCount, string? Error, bool Duplicate = false, int? ImportBatchId = null, string? SourcePeriod = null);
 
 public interface IImportService
 {
@@ -53,11 +53,18 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
             await using var db = await dbFactory.CreateDbContextAsync(ct);
             // Same file already staged → reuse it rather than re-parsing (e.g. one GL dump across batches).
             var existing = await db.ImportBatches
-                .FirstOrDefaultAsync(b => b.SourceType == type && b.ContentHash == hash && b.Status == ImportStatus.Parsed, ct);
-            if (existing is not null)
-                return new ImportOutcome(true, type, existing.RowCount, null, Duplicate: true, ImportBatchId: existing.ImportBatchId);
+                .FirstOrDefaultAsync(b => b.SourceType == type && b.ContentHash == hash, ct);
+            if (existing is { Status: ImportStatus.Parsed })
+            {
+                var sourcePeriod = await RefreshSourcePeriodAsync(db, existing, ct);
+                if (type is SourceType.GlDump or SourceType.InterchangeFee)
+                    await RefreshSourceEvidenceAsync(db, existing.ImportBatchId, type.Value, HeaderMap(ws, headerRow), DataRows(ws, headerRow), ct);
+                return new ImportOutcome(true, type, existing.RowCount, null, Duplicate: true, ImportBatchId: existing.ImportBatchId, SourcePeriod: sourcePeriod);
+            }
 
-            var batch = new ImportBatch
+            if (existing is not null && (existing.Status != ImportStatus.Failed || !await PrepareFailedRetryAsync(db, existing, ct)))
+                return new ImportOutcome(false, type, 0, "This file already has an active or referenced import. Check its status in Import files before retrying.", ImportBatchId: existing.ImportBatchId);
+            var batch = existing ?? new ImportBatch
             {
                 SourceType = type.Value,
                 FileName = fileName,
@@ -66,7 +73,8 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 Status = ImportStatus.Uploaded,
                 SchemeProfileId = schemeProfileId
             };
-            db.ImportBatches.Add(batch);
+            batch.PeriodKey = periodKey; batch.SchemeProfileId = schemeProfileId;
+            if (existing is null) db.ImportBatches.Add(batch);
             await db.SaveChangesAsync(ct);
 
             try
@@ -81,8 +89,9 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                     ?? throw new InvalidOperationException("Import batch was not found after staging.");
                 persistedBatch.RowCount = count;
                 persistedBatch.Status = ImportStatus.Parsed;
+                var sourcePeriod = await RefreshSourcePeriodAsync(db, persistedBatch, ct);
                 await db.SaveChangesAsync(ct);
-                return new ImportOutcome(true, type, count, null, ImportBatchId: batch.ImportBatchId);
+                return new ImportOutcome(true, type, count, null, ImportBatchId: batch.ImportBatchId, SourcePeriod: sourcePeriod);
             }
             catch (Exception ex)
             {
@@ -166,48 +175,35 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
     };
 
     // ---- source detection ----------------------------------------------------
+    // Export versions use either spaces or underscores for the same column names.
+    private static string NormalizeHeader(string value) => string.Join(" ",
+        value.Replace('_', ' ').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
+
     private static (SourceType?, int headerRow) DetectSource(IXLWorksheet ws)
     {
-        // Interchange puts its header on row 3 (title row 1, blank row 2); others on row 1.
         for (var r = 1; r <= 4; r++)
         {
-            var headers = ws.Row(r).CellsUsed().Select(c => (c.GetString() ?? "").Trim().ToUpperInvariant()).ToHashSet();
-            if (headers.Count < 3) continue;
-
-            if (headers.Contains("HEADER CODE") && headers.Contains("MESSAGE TYPE INDICATOR"))
-                return (SourceType.NetworkT464, r);
-            if (headers.Contains("MICROFILM REF NUMBER") && headers.Contains("INTERCHANGE FEES"))
-                return (SourceType.InterchangeFee, r);
-            if (headers.Contains("SOL_ID") && headers.Contains("GL_SUB_HEAD_CODE"))
-                return (SourceType.GlDump, r);
-            if (headers.Contains("MERCHANT_ACRONYM") && headers.Contains("SETTLEMENT_AMOUNT"))
-            {
-                // ATM vs POS: disambiguate by the transaction wording column content.
-                var wordingCol = ColIndex(ws, r, "TRANSACTION_WORDING");
-                if (wordingCol > 0)
-                {
-                    var sample = ws.Column(wordingCol).CellsUsed()
-                        .Skip(1).Take(50).Select(c => c.GetString().ToUpperInvariant());
-                    if (sample.Any(v => v.Contains("WITHDRAWAL")))
-                        return (SourceType.AtmSettlement, r);
-                }
-                return (SourceType.PosSettlement, r);
-            }
+            var wordingCol = ColIndex(ws, r, "TRANSACTION WORDING");
+            var wording = wordingCol > 0
+                ? ws.Column(wordingCol).CellsUsed().Where(c => c.Address.RowNumber > r).Take(50).Select(c => c.GetString())
+                : null;
+            var type = DetectSource(ws.Row(r).CellsUsed().Select(c => c.GetString()), wording);
+            if (type is not null) return (type, r);
         }
         return (null, 0);
     }
 
     private static SourceType? DetectSource(IEnumerable<string> headers, IEnumerable<string>? wording = null)
     {
-        var set = headers.Select(v => v.Trim().ToUpperInvariant()).Where(v => v.Length > 0).ToHashSet();
+        var set = headers.Select(NormalizeHeader).Where(v => v.Length > 0).ToHashSet();
         if (set.Contains("HEADER CODE") && set.Contains("MESSAGE TYPE INDICATOR")) return SourceType.NetworkT464;
+        // This specific signature must precede the shared settlement-report columns.
         if (set.Contains("MICROFILM REF NUMBER") && set.Contains("INTERCHANGE FEES")) return SourceType.InterchangeFee;
-        if (set.Contains("SOL_ID") && set.Contains("GL_SUB_HEAD_CODE")) return SourceType.GlDump;
-        if (!set.Contains("MERCHANT_ACRONYM") || !set.Contains("SETTLEMENT_AMOUNT")) return null;
+        if (set.Contains("SOL ID") && set.Contains("GL SUB HEAD CODE")) return SourceType.GlDump;
+        if (!set.Contains("MERCHANT ACRONYM") || !set.Contains("SETTLEMENT AMOUNT")) return null;
         return wording?.Any(v => v.Contains("WITHDRAWAL", StringComparison.OrdinalIgnoreCase)) == true
             ? SourceType.AtmSettlement : SourceType.PosSettlement;
     }
-
     private async Task<ImportOutcome> ImportCsvAsync(Stream stream, string fileName, string periodKey, string hash, int? schemeProfileId, CancellationToken ct)
     {
         stream.Position = 0;
@@ -231,24 +227,32 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         foreach (var candidate in rows.Take(4))
         {
             var headings = candidate.Fields;
-            var wordingIndex = Array.FindIndex(headings, h => string.Equals(h.Trim(), "TRANSACTION_WORDING", StringComparison.OrdinalIgnoreCase));
+            var wordingIndex = Array.FindIndex(headings, h => NormalizeHeader(h) == "TRANSACTION WORDING");
             type = DetectSource(headings, wordingIndex < 0 ? null : rows.SkipWhile(r => r != candidate).Skip(1).Take(50).Select(r => r.GetCell(wordingIndex + 1)?.ToString() ?? ""));
             if (type is not null) { header = candidate; break; }
         }
         if (header is null || type is null)
             return new ImportOutcome(false, null, 0, "Unrecognised CSV — header did not match any known BankOne export.");
 
-        var headers = header.Fields.Select((name, index) => (name: name.Trim(), column: index + 1))
+        var headers = header.Fields.Select((name, index) => (name: NormalizeHeader(name), column: index + 1))
             .Where(x => x.name.Length > 0).ToDictionary(x => x.name, x => x.column, StringComparer.OrdinalIgnoreCase);
         var dataRows = rows.Where(r => r.SourceRowNumber > header.SourceRowNumber).Cast<IImportRow>().ToList();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var existing = await db.ImportBatches.FirstOrDefaultAsync(b => b.SourceType == type && b.ContentHash == hash && b.Status == ImportStatus.Parsed, ct);
-        if (existing is not null)
-            return new ImportOutcome(true, type, existing.RowCount, null, Duplicate: true, ImportBatchId: existing.ImportBatchId);
+        var existing = await db.ImportBatches.FirstOrDefaultAsync(b => b.SourceType == type && b.ContentHash == hash, ct);
+        if (existing is { Status: ImportStatus.Parsed })
+        {
+            var sourcePeriod = await RefreshSourcePeriodAsync(db, existing, ct);
+            if (type is SourceType.GlDump or SourceType.InterchangeFee)
+                await RefreshSourceEvidenceAsync(db, existing.ImportBatchId, type.Value, headers, dataRows, ct);
+            return new ImportOutcome(true, type, existing.RowCount, null, Duplicate: true, ImportBatchId: existing.ImportBatchId, SourcePeriod: sourcePeriod);
+        }
 
-        var batch = new ImportBatch { SourceType = type.Value, FileName = fileName, ContentHash = hash, PeriodKey = periodKey, Status = ImportStatus.Uploaded, SchemeProfileId = schemeProfileId };
-        db.ImportBatches.Add(batch);
+        if (existing is not null && (existing.Status != ImportStatus.Failed || !await PrepareFailedRetryAsync(db, existing, ct)))
+            return new ImportOutcome(false, type, 0, "This file already has an active or referenced import. Check its status in Import files before retrying.", ImportBatchId: existing.ImportBatchId);
+        var batch = existing ?? new ImportBatch { SourceType = type.Value, FileName = fileName, ContentHash = hash, PeriodKey = periodKey, Status = ImportStatus.Uploaded, SchemeProfileId = schemeProfileId };
+        batch.PeriodKey = periodKey; batch.SchemeProfileId = schemeProfileId;
+        if (existing is null) db.ImportBatches.Add(batch);
         await db.SaveChangesAsync(ct);
         try
         {
@@ -260,8 +264,9 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
             var persistedBatch = await db.ImportBatches.FindAsync([batch.ImportBatchId], ct) ?? throw new InvalidOperationException("Import batch was not found after staging.");
             persistedBatch.RowCount = count;
             persistedBatch.Status = ImportStatus.Parsed;
+            var sourcePeriod = await RefreshSourcePeriodAsync(db, persistedBatch, ct);
             await db.SaveChangesAsync(ct);
-            return new ImportOutcome(true, type, count, null, ImportBatchId: batch.ImportBatchId);
+            return new ImportOutcome(true, type, count, null, ImportBatchId: batch.ImportBatchId, SourcePeriod: sourcePeriod);
         }
         catch (Exception ex)
         {
@@ -276,12 +281,103 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         }
     }
 
+    private static async Task<string?> RefreshSourcePeriodAsync(AppDbContext db, ImportBatch batch, CancellationToken ct)
+    {
+        IQueryable<DateOnly?>? dates = batch.SourceType switch
+        {
+            SourceType.InterchangeFee => db.StgInterchangeFees.Where(t => t.ImportBatchId == batch.ImportBatchId)
+                .Select(t => t.ProcessingDate ?? (t.TransactionDate.HasValue ? DateOnly.FromDateTime(t.TransactionDate.Value) : (DateOnly?)null)),
+            SourceType.GlDump => db.StgGlEntries.Where(g => g.ImportBatchId == batch.ImportBatchId).Select(g => g.TranDate)
+                .Concat(db.StgGlBulkPostings.Where(g => g.ImportBatchId == batch.ImportBatchId).Select(g => g.TranDate)),
+            SourceType.PosSettlement or SourceType.AtmSettlement => db.StgDebitSettlements.Where(t => t.ImportBatchId == batch.ImportBatchId)
+                .Select(t => t.ProcessingDate ?? t.TransactionDate),
+            _ => null
+        };
+        if (dates is null) return null;
+        // Processing/posting dates determine the import month. Transaction/value dates
+        // can precede it. Do not infer a single-month label for mixed-month evidence.
+        var months = await dates.Where(d => d.HasValue).Select(d => new { d!.Value.Year, d.Value.Month }).Distinct().Take(2).ToListAsync(ct);
+        if (months.Count == 1)
+        {
+            var sourcePeriod = $"{months[0].Year:0000}-{months[0].Month:00}";
+            if (batch.PeriodKey != sourcePeriod)
+            {
+                batch.PeriodKey = sourcePeriod;
+                await db.SaveChangesAsync(ct);
+            }
+            return sourcePeriod;
+        }
+        return null;
+    }
+
+    private static async Task<bool> PrepareFailedRetryAsync(AppDbContext db, ImportBatch batch, CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var current = await db.ImportBatches.FromSqlInterpolated($"SELECT * FROM [ImportBatches] WITH (UPDLOCK, HOLDLOCK) WHERE [ImportBatchId] = {batch.ImportBatchId}")
+            .AsNoTracking().SingleAsync(ct);
+        if (current.Status != ImportStatus.Failed || await db.ReconRuns.AnyAsync(r => r.ProcessorBatchId == batch.ImportBatchId ||
+            r.GlBatchId == batch.ImportBatchId || r.NetworkBatchId == batch.ImportBatchId, ct)) return false;
+        // Only an unreferenced failed import is replaceable. Remove its partial staging
+        // inside the same transaction and reserve the existing batch ID for this retry.
+        await db.NormalizedTransactions.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct);
+        await db.NormalizedGlEntries.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct);
+        switch (batch.SourceType)
+        {
+            case SourceType.InterchangeFee:
+                await db.StgInterchangeFees.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct); break;
+            case SourceType.GlDump:
+                await db.StgGlBulkPostings.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct);
+                await db.StgGlEntries.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct); break;
+            case SourceType.PosSettlement: case SourceType.AtmSettlement:
+                await db.StgDebitSettlements.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct); break;
+            case SourceType.NetworkT464:
+                await db.StgNetworkT464.Where(r => r.ImportBatchId == batch.ImportBatchId).ExecuteDeleteAsync(ct); break;
+        }
+        batch.Status = ImportStatus.Uploaded; batch.ParseError = null; batch.RowCount = 0;
+        await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct);
+        return true;
+    }
+
     private static int ColIndex(IXLWorksheet ws, int headerRow, string name)
     {
         foreach (var c in ws.Row(headerRow).CellsUsed())
-            if (string.Equals(c.GetString().Trim(), name, StringComparison.OrdinalIgnoreCase))
+            if (NormalizeHeader(c.GetString()) == NormalizeHeader(name))
                 return c.Address.ColumnNumber;
         return -1;
+    }
+
+    private static async Task RefreshSourceEvidenceAsync(AppDbContext db, int batchId, SourceType type, Dictionary<string, int> headers, IEnumerable<IImportRow> rows, CancellationToken ct)
+    {
+        var sourceRows = rows.ToList();
+        if (type == SourceType.GlDump)
+        {
+            if (headers.ContainsKey(NormalizeHeader("VALUE_DATE")))
+            {
+                var dates = sourceRows.ToDictionary(r => r.SourceRowNumber, r => ValueParsers.Date(Cell(r, headers, "VALUE_DATE")));
+                foreach (var row in await db.StgGlEntries.Where(x => x.ImportBatchId == batchId && x.ValueDate == null).ToListAsync(ct))
+                    if (dates.TryGetValue(row.SourceRowNumber, out var value)) row.ValueDate = value;
+                foreach (var row in await db.StgGlBulkPostings.Where(x => x.ImportBatchId == batchId && x.ValueDate == null).ToListAsync(ct))
+                    if (dates.TryGetValue(row.SourceRowNumber, out var value)) row.ValueDate = value;
+            }
+            if (headers.ContainsKey(NormalizeHeader("TRAN_RMKS")))
+            {
+                // Legacy tokens cannot be reversed. Restore only from the same original file.
+                var remarks = sourceRows.ToDictionary(r => r.SourceRowNumber,
+                    r => global::Recon.Web.Services.Recon.CardIdentity.ImportRemarks(Cell(r, headers, "TRAN_RMKS")));
+                foreach (var row in await db.StgGlEntries.Where(x => x.ImportBatchId == batchId && x.TranRmks != null && x.TranRmks.StartsWith("card:v1:")).ToListAsync(ct))
+                    if (remarks.TryGetValue(row.SourceRowNumber, out var value)) row.TranRmks = value;
+                foreach (var row in await db.StgGlBulkPostings.Where(x => x.ImportBatchId == batchId && x.TranRmks != null && x.TranRmks.StartsWith("card:v1:")).ToListAsync(ct))
+                    if (remarks.TryGetValue(row.SourceRowNumber, out var value)) row.TranRmks = value;
+            }
+        }
+        else if (type == SourceType.InterchangeFee && headers.ContainsKey(NormalizeHeader("CARD_ACCOUNT_ENTITY_ID")))
+        {
+            var cards = sourceRows.ToDictionary(r => r.SourceRowNumber,
+                r => global::Recon.Web.Services.Recon.CardIdentity.FromSource(Cell(r, headers, "CARD_ACCOUNT_ENTITY_ID")));
+            foreach (var row in await db.StgInterchangeFees.Where(x => x.ImportBatchId == batchId && x.CardAccountEntityId == null).ToListAsync(ct))
+                if (cards.TryGetValue(row.SourceRowNumber, out var value)) row.CardAccountEntityId = value;
+        }
+        await db.SaveChangesAsync(ct);
     }
 
     private interface IImportRow
@@ -322,7 +418,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
     {
         var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in ws.Row(headerRow).CellsUsed())
-            map[c.GetString().Trim()] = c.Address.ColumnNumber;
+            map[NormalizeHeader(c.GetString())] = c.Address.ColumnNumber;
         return map;
     }
 
@@ -339,7 +435,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
 
     private static object? Cell(IImportRow row, Dictionary<string, int> h, string name)
     {
-        if (!h.TryGetValue(name, out var col)) return null;
+        if (!h.TryGetValue(NormalizeHeader(name), out var col)) return null;
         return row.GetCell(col);
     }
 
@@ -460,6 +556,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 MicrofilmRefSeq = ValueParsers.Int(Cell(row, h, "MICROFILM REF SEQ")),
                 ReferenceNumber = ValueParsers.Clean(Cell(row, h, "REFERENCE NUMBER")),
                 CardNumberHashed = ValueParsers.Clean(Cell(row, h, "CARD NUMBER")),
+                CardAccountEntityId = global::Recon.Web.Services.Recon.CardIdentity.FromSource(Cell(row, h, "CARD ACCOUNT ENTITY ID")),
                 ProductCode = ValueParsers.Clean(Cell(row, h, "PRODUCT CODE")),
                 ProductType = ValueParsers.Clean(Cell(row, h, "PRODUCT TYPE")),
                 ClientCode = ValueParsers.Clean(Cell(row, h, "CLIENT CODE")),
@@ -504,6 +601,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 GlAccount = ValueParsers.Clean(Cell(row, h, "GL_ACCOUNT")),
                 AcctName = ValueParsers.Clean(Cell(row, h, "ACCT_NAME")),
                 TranDate = ValueParsers.Date(Cell(row, h, "TRAN_DATE")),
+                ValueDate = ValueParsers.Date(Cell(row, h, "VALUE_DATE")),
                 TranId = ValueParsers.Clean(Cell(row, h, "TRAN_ID")),
                 RefNum = ValueParsers.Clean(Cell(row, h, "REF_NUM")),
                 TranParticular = ValueParsers.Clean(Cell(row, h, "TRAN_PARTICULAR")),
@@ -511,7 +609,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
                 TranParticularCode = ValueParsers.Clean(Cell(row, h, "TRAN_PARTICULAR_CODE")),
                 Debit = ValueParsers.Amount(Cell(row, h, "DEBIT")),
                 Credit = ValueParsers.Amount(Cell(row, h, "CREDIT")),
-                TranRmks = ValueParsers.Clean(Cell(row, h, "TRAN_RMKS")),
+                TranRmks = global::Recon.Web.Services.Recon.CardIdentity.ImportRemarks(Cell(row, h, "TRAN_RMKS")),
                 TranAmt = ValueParsers.Amount(Cell(row, h, "TRAN_AMT")),
                 TranCcyCode = ValueParsers.Clean(Cell(row, h, "TRAN_CRNCY_CODE")),
                 EntryUserId = ValueParsers.Clean(Cell(row, h, "ENTRY_USER_ID")),
@@ -551,6 +649,7 @@ public class ImportService(IDbContextFactory<AppDbContext> dbFactory) : IImportS
         GlAccount = entry.GlAccount,
         AcctName = entry.AcctName,
         TranDate = entry.TranDate,
+        ValueDate = entry.ValueDate,
         TranId = entry.TranId,
         RefNum = entry.RefNum,
         TranParticular = entry.TranParticular,

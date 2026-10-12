@@ -1,0 +1,106 @@
+@page "/recon/run/{RunId:int}/matching-review"
+@implements IDisposable
+@using Recon.Web.Services.Recon
+@inject MatchingReviewService Review
+@inject LocalAiReviewService LocalAi
+@inject ILogger<MatchingReview> Logger
+
+<PageTitle>AI Analysis · batch #@RunId</PageTitle>
+<PageHeader Title="AI Analysis" Subtitle="@($"Validate assignments and inspect additional candidates for batch #{RunId}")" Eyebrow="Reconciliation" Icon="bulk" Breadcrumbs="@(new[] { "Reconciliation", $"Batch #{RunId}", "AI Analysis" })" />
+<a href="@($"/recon/run/{RunId}")" class="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-primary-700 dark:text-primary-300"><ChevronRightIcon Class="h-4 w-4 rotate-180" />Back to batch #@RunId</a>
+
+@if (_loading)
+{
+    <p role="status" class="text-sm text-gray-600 dark:text-gray-300">Checking source evidence…</p>
+}
+@if (_error is not null)
+{
+    <p role="alert" class="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">@_error</p>
+}
+@if (_report is not null)
+{
+    @if (_report.RunPeriod != _report.SourcePeriod)
+    {
+        <div class="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"><strong>Period needs correction.</strong> This run is labelled @_report.RunPeriod; its processor batch is @_report.SourcePeriod. Start a new reconciliation with the source period before searching adjacent periods.</div>
+    }
+    <div class="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        @foreach (var metric in Metrics())
+        {
+            <div class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800"><div class="flex items-start gap-3"><ChartIcon Class="mt-1 h-5 w-5 shrink-0 text-violet-600 dark:text-violet-300" /><div><p class="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">@metric.Label</p><p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">@metric.Count.ToString("N0")</p><p class="mt-1 text-xs text-gray-600 dark:text-gray-300">@metric.Detail</p></div></div></div>
+        }
+    </div>
+    <section class="mb-5 rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-900 dark:bg-violet-950/30">
+        <div class="flex flex-wrap items-center justify-between gap-4"><div><h2 class="flex items-center gap-2 text-sm font-semibold text-violet-950 dark:text-violet-100"><ChartIcon Class="h-5 w-5" />Local AI exception review</h2><p class="mt-1 text-sm text-violet-800 dark:text-violet-200">Review up to 5 sampled cases with @LocalAi.Model. Only row IDs, dates, amounts, currencies, GL direction and transaction codes are supplied.</p><p class="mt-1 text-xs text-violet-800 dark:text-violet-200">Recommendations require analyst verification. Original results remain available in the batch register.</p></div><button @onclick="RunAi" disabled="@_aiRunning" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">@(_aiRunning ? "Analysing locally…" : "AI Analysis")</button></div>
+        @if (_aiRunning) { <p role="status" class="mt-3 text-sm text-violet-800 dark:text-violet-200">The local model is reviewing the evidence. This may take a few minutes.</p> }
+        @if (_aiError is not null) { <p role="alert" class="mt-3 text-sm text-red-700 dark:text-red-300">@_aiError</p> }
+        @if (_aiResult is not null) { <p class="mt-3 text-xs text-violet-800 dark:text-violet-200">@_aiResult.Findings.Count recommendations passed case/action/citation checks · @_aiResult.Model · @_aiResult.GeneratedUtc.ToString("yyyy-MM-dd HH:mm") UTC. Explanation text still needs analyst review.</p> }
+    </section>
+    <section class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border-b border-gray-200 p-4 dark:border-gray-700"><h2 class="text-sm font-semibold text-gray-900 dark:text-white">Review evidence</h2><p class="mt-1 text-xs text-gray-600 dark:text-gray-300">Showing a sample of exceptions or the complete list of date-window candidates. Candidates require reference and debit/credit direction verification before manual acceptance.</p><label class="mt-3 flex items-center gap-2 text-sm text-gray-800 dark:text-gray-100"><input type="checkbox" @bind="_showDateWindow" @bind:after="ResetPage" class="rounded border-gray-300 text-primary-600" />Show all @_report.UniqueDateWindowCandidates.ToString("N0") date-window candidates</label></div>
+        <div class="overflow-x-auto"><table class="w-full text-left text-sm"><thead class="bg-gray-50 text-xs uppercase text-gray-600 dark:bg-gray-900/40 dark:text-gray-300"><tr><th class="px-4 py-3">Case / source row</th><th class="px-4 py-3">Evidence</th><th class="px-4 py-3">GL candidates</th><th class="px-4 py-3">Review recommendation</th></tr></thead><tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+        @foreach (var item in VisibleCases())
+        {
+            var finding = _aiResult?.Findings.SingleOrDefault(x => x.MatchId == item.MatchId);
+            <tr @key="item.MatchId" class="align-top text-gray-800 dark:text-gray-100"><td class="px-4 py-3"><p class="font-semibold">@Category(item.Category)</p><p class="mt-1 text-xs">Match #@item.MatchId · processor row @item.ProcessorRow</p><p class="mt-1 text-xs text-gray-600 dark:text-gray-300">@item.Leg · code @item.TransactionCode</p></td><td class="px-4 py-3 tabular-nums">@(item.TransactionDate?.ToString("yyyy-MM-dd") ?? "Date missing")<br />@(item.Amount?.ToString("N2") ?? "Amount missing") · @(item.Currency?.ToString() ?? "Currency missing")<br /><span class="text-xs text-gray-600 dark:text-gray-300">Assigned currency: @(item.AssignedCurrency?.ToString() ?? "none")</span></td><td class="px-4 py-3"><p class="mb-1 text-xs font-semibold">@item.CandidateCount candidate(s)</p>@foreach (var gl in item.Candidates) { <p class="mb-2 text-xs tabular-nums">GL #@gl.GlId · row @gl.SourceRow<br />@(gl.ValueDate?.ToString("yyyy-MM-dd") ?? "Value date missing") · @gl.Amount.ToString("N2") · @gl.Currency<br />Date difference: @(gl.DateLag?.ToString() ?? "unknown") day(s) · direction @gl.Direction<br />Card identity: @(gl.CardIdentityAgrees is true ? "agrees" : gl.CardIdentityAgrees is false ? "conflicts" : "unavailable")</p> }</td><td class="max-w-sm px-4 py-3 text-xs">@if (finding is not null) { <p class="font-semibold text-violet-800 dark:text-violet-200">AI suggestion · @finding.Action.Replace('_', ' ')</p><p class="mt-1">@finding.Explanation</p><p class="mt-1 text-gray-600 dark:text-gray-300">Cited GL: @(finding.GlIds.Length == 0 ? "none" : string.Join(", ", finding.GlIds))</p> } else { <span>@NextStep(item.Category)</span> }</td></tr>
+        }
+        @if (_report.Cases.Count == 0) { <tr><td colspan="4" class="px-4 py-8 text-center text-gray-600 dark:text-gray-300">No sampled review cases were found.</td></tr> }
+        </tbody></table></div>
+        @if (_showDateWindow)
+        {
+            <div class="flex items-center justify-between border-t border-gray-200 px-4 py-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-200"><button @onclick="() => _candidatePage--" disabled="@(_candidatePage == 0)" class="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 dark:border-gray-600">Previous</button><span>Page @(_candidatePage + 1) · @_report.UniqueDateWindowCandidates.ToString("N0") candidates</span><button @onclick="() => _candidatePage++" disabled="@((_candidatePage + 1) * 50 >= _report.DateWindowCandidates.Count)" class="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40 dark:border-gray-600">Next</button></div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public int RunId { get; set; }
+    private MatchingReviewReport? _report;
+    private LocalAiReviewResult? _aiResult;
+    private string? _error, _aiError;
+    private bool _loading, _aiRunning;
+    private bool _showDateWindow;
+    private int _candidatePage;
+    private readonly CancellationTokenSource _lifetime = new();
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true; _report = null; _error = null; _aiResult = null; _candidatePage = 0; _showDateWindow = false;
+        try { _report = await Review.AnalyzeAsync(RunId, _lifetime.Token); }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException) { _error = ex.Message; }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Matching review failed for run {RunId}", RunId); _error = "The evidence review could not be completed. Retry after checking the database connection."; }
+        finally { _loading = false; }
+    }
+    private async Task RunAi()
+    {
+        if (_aiRunning) return;
+        _aiRunning = true; _aiError = null; _aiResult = null;
+        try { _aiResult = await LocalAi.RunAsync(RunId, _lifetime.Token); }
+        catch (OperationCanceledException) { _aiError = "The local review was cancelled or timed out. Retry with Ollama running."; }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException) { _aiError = ex.Message; }
+        catch (Exception ex) { Logger.LogWarning(ex, "Local AI review failed for run {RunId}", RunId); _aiError = "The local model could not complete the review. Check Ollama and retry."; }
+        finally { _aiRunning = false; }
+    }
+    private IEnumerable<MatchingReviewCase> VisibleCases() => _showDateWindow
+        ? _report!.DateWindowCandidates.Skip(_candidatePage * 50).Take(50) : _report!.Cases;
+    private void ResetPage() => _candidatePage = 0;
+    private IEnumerable<(string Label, int Count, string Detail)> Metrics()
+    {
+        yield return ("Missing GL references", _report!.MissingGlReferences, "Obtain a richer GL export to verify identity");
+        yield return ("Currency conflicts", _report.CurrencyConflicts, "Recorded GL currency disagrees with the assignment");
+        yield return ("Repeated primary keys", _report.RepeatedPrimaryAssignments, "Existing assignments need corroborating evidence");
+        yield return ("Unique date-window candidates", _report.UniqueDateWindowCandidates, "Exact amount/currency/leg within ±2 days; review required");
+        yield return ("Ambiguous transactions", _report.AmbiguousTransactions, "Competing evidence remains unresolved");
+        yield return ("Unmatched transactions", _report.UnmatchedTransactions, "No accepted GL assignment");
+        yield return ("TMS card identities", _report.CardIdentityTransactions, "Full textual CARD_ACCOUNT_ENTITY_ID available for direct comparison");
+        yield return ("GL card identities", _report.CardIdentityGlEntries, "Exact card evidence available from TRAN_RMKS");
+    }
+    private static string Category(string category) => category.Replace('_', ' ');
+    private static string NextStep(string category) => category switch
+    {
+        "currency_conflict" => "Verify posting currency and amount basis against the source export.",
+        "unique_date_window" => "Verify reference and direction before manually accepting this candidate.",
+        "missing_evidence" => "Request reference or additional source evidence; avoid guessing an identity.",
+        _ => "Check references and direction to distinguish competing transactions."
+    };
+    public void Dispose() { _lifetime.Cancel(); _lifetime.Dispose(); }
+}

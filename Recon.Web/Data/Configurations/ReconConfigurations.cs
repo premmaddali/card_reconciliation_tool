@@ -10,6 +10,19 @@ public class ReconParametersConfiguration : IEntityTypeConfiguration<ReconParame
     {
         b.HasKey(x => x.ReconParametersId);
         b.Property(x => x.AmountTolerance).HasColumnType("decimal(19,4)");
+        b.Property(x => x.SettlementSpreadDays).HasDefaultValue(20);
+    }
+}
+
+public class ReconPeriodRunConfiguration : IEntityTypeConfiguration<ReconPeriodRun>
+{
+    public void Configure(EntityTypeBuilder<ReconPeriodRun> b)
+    {
+        b.HasKey(x => x.ReconPeriodRunId);
+        b.Property(x => x.Function).HasConversion<byte>();
+        b.Property(x => x.Status).HasConversion<byte>();
+        b.Property(x => x.PeriodKey).HasMaxLength(7);
+        b.HasIndex(x => new { x.Function, x.PeriodKey, x.SchemeProfileId });
     }
 }
 
@@ -48,6 +61,7 @@ public class ReconExceptionConfiguration : IEntityTypeConfiguration<ReconExcepti
         b.HasKey(x => x.ReconExceptionId);
         b.Property(x => x.ExceptionType).HasConversion<byte>();
         b.Property(x => x.Status).HasConversion<byte>();
+        b.Property(x => x.ProcessorSource).HasConversion<byte>();
         b.Property(x => x.SettlementLeg).HasConversion<byte>().HasDefaultValue(ReconSettlementLeg.DebitCardholder);
         b.Property(x => x.ReferenceNumber).HasMaxLength(32);
         b.Property(x => x.ProcessorAccountNumber).HasMaxLength(128);
@@ -59,6 +73,21 @@ public class ReconExceptionConfiguration : IEntityTypeConfiguration<ReconExcepti
             b.Property(p).HasColumnType("decimal(19,4)");
         b.HasOne(x => x.ReconRun).WithMany().HasForeignKey(x => x.ReconRunId);
         b.HasIndex(x => new { x.ReconRunId, x.Status });
+        b.HasIndex(x => new { x.ReconRunId, x.ProcessorStagingId });
+        b.HasIndex(x => new { x.ReconRunId, x.GlStagingId });
+    }
+}
+
+public class ReconRunPassConfiguration : IEntityTypeConfiguration<ReconRunPass>
+{
+    public void Configure(EntityTypeBuilder<ReconRunPass> b)
+    {
+        b.HasKey(x => x.ReconRunPassId);
+        b.Property(x => x.Kind).HasConversion<byte>();
+        b.Property(x => x.TargetPeriodKey).HasMaxLength(7);
+        b.Property(x => x.Detail).HasMaxLength(500);
+        b.HasOne(x => x.ReconRun).WithMany().HasForeignKey(x => x.ReconRunId).OnDelete(DeleteBehavior.Cascade);
+        b.HasIndex(x => new { x.ReconRunId, x.Kind });
     }
 }
 

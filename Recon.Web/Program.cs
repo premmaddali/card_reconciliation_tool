@@ -5,7 +5,10 @@ using System.Text;
 using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Radzen;
 using Recon.Web.Components;
 using Recon.Web.Data;
@@ -19,6 +22,7 @@ using Recon.Web.Services.Import;
 using Recon.Web.Services.Recon;
 
 var builder = WebApplication.CreateBuilder(args);
+ApplicationKeyProtection.Configure(builder.Services, builder.Configuration);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -35,12 +39,21 @@ builder.Services.AddSingleton<IAdapterRegistry>(sp => new AdapterRegistry(
     [new BankOneGlAdapter()]));
 builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IReconEngine, ReconEngine>();
+builder.Services.AddScoped<SecondaryMatchService>();
+builder.Services.AddScoped<DailyReconService>();
+builder.Services.AddScoped<MatchingReviewService>();
+builder.Services.AddHttpClient<LocalAiReviewService>(client =>
+{
+    client.BaseAddress = new Uri("http://127.0.0.1:11434/");
+    client.Timeout = TimeSpan.FromMinutes(3);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
 builder.Services.AddScoped<IAtmNetworkValidationService, AtmNetworkValidationService>();
 builder.Services.AddScoped<INetworkAtmReconService, NetworkAtmReconService>();
 builder.Services.AddScoped<IExceptionWorkflowService, ExceptionWorkflowService>();
 builder.Services.AddScoped<IReconVerificationService, ReconVerificationService>();
 builder.Services.AddScoped<IBatchArchiveService, BatchArchiveService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddScoped<DataCleanupService>();
 builder.Services.AddScoped<ILdapAuthService, LdapAuthService>();
 builder.Services.Configure<MatchWeights>(builder.Configuration.GetSection(MatchWeights.SectionName));
 builder.Services.Configure<ActiveDirectoryOptions>(
@@ -49,14 +62,19 @@ builder.Services.Configure<ActiveDirectoryOptions>(
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
 // Scoped DbContext for Identity + a factory for Blazor components/services.
+var configuredDatabaseConnection = builder.Configuration.GetConnectionString("Default");
+if (string.IsNullOrWhiteSpace(configuredDatabaseConnection))
+    throw new InvalidOperationException($"ConnectionStrings:Default is missing in environment '{builder.Environment.EnvironmentName}'. Configure the server connection before starting ReconTool.");
+var databaseConnection = new SqlConnectionStringBuilder(configuredDatabaseConnection);
+if (!databaseConnection.ShouldSerialize("Connect Timeout")) databaseConnection.ConnectTimeout = 30;
 builder.Services.AddDbContext<AppDbContext>((sp, options) =>
 {
-    options.UseSqlServer(builder.Configuration.GetConnectionString("Default"));
+    options.UseSqlServer(databaseConnection.ConnectionString);
     options.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
 });
 builder.Services.AddDbContextFactory<AppDbContext>((sp, options) =>
 {
-    options.UseSqlServer(builder.Configuration.GetConnectionString("Default"));
+    options.UseSqlServer(databaseConnection.ConnectionString);
     options.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
 }, lifetime: ServiceLifetime.Scoped);
 
@@ -393,9 +411,21 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 // Apply any pending migrations on startup and seed reference + identity data.
+var databaseConfigurationSource = ((IConfigurationRoot)builder.Configuration).Providers.Reverse()
+    .FirstOrDefault(provider => provider.TryGet("ConnectionStrings:Default", out _))?.ToString() ?? "unknown";
+StartupDiagnostics.Log(app.Logger, app.Environment.EnvironmentName, app.Environment.ContentRootPath,
+    databaseConnection, databaseConfigurationSource);
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await StartupConnection.OpenAsync(async () =>
+    {
+        // EF checks database existence through a separate connection to master. Probe
+        // that same path too; a target-only check misses the handshake in the UAT log.
+        // A missing database remains eligible for normal EF migration creation.
+        if (await db.GetService<IRelationalDatabaseCreator>().ExistsAsync())
+            await db.Database.OpenConnectionAsync();
+    }, app.Logger);
     db.Database.Migrate();
 }
 await DbSeeder.SeedAsync(app.Services);

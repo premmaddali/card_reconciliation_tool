@@ -700,6 +700,9 @@ namespace Recon.Web.Migrations
                     b.Property<decimal>("AverageConfidence")
                         .HasColumnType("decimal(5,2)");
 
+                    b.Property<int?>("CardOfRunId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("CompletedDate")
                         .HasColumnType("datetime2");
 
@@ -721,6 +724,9 @@ namespace Recon.Web.Migrations
                     b.Property<int?>("GlBatchId")
                         .HasColumnType("int");
 
+                    b.Property<bool>("IsAdjacentPeriodRun")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("IsArchived")
                         .HasColumnType("bit");
 
@@ -734,8 +740,16 @@ namespace Recon.Web.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("nvarchar(120)");
 
+                    b.Property<int?>("ParentPeriodRunId")
+                        .HasColumnType("int");
+
                     b.Property<DateOnly?>("PeriodEnd")
                         .HasColumnType("date");
+
+                    b.Property<byte>("PeriodGranularity")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint")
+                        .HasDefaultValue((byte)0);
 
                     b.Property<string>("PeriodKey")
                         .IsRequired()
@@ -758,6 +772,15 @@ namespace Recon.Web.Migrations
                     b.Property<int?>("SchemeProfileId")
                         .HasColumnType("int");
 
+                    b.Property<int>("SecondaryAmbiguousCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SecondaryMatchCount")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SecondaryOfRunId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("StartedDate")
                         .HasColumnType("datetime2");
 
@@ -778,13 +801,23 @@ namespace Recon.Web.Migrations
 
                     b.HasKey("ReconRunId");
 
+                    b.HasIndex("CardOfRunId")
+                        .IsUnique()
+                        .HasFilter("[CardOfRunId] IS NOT NULL");
+
                     b.HasIndex("GlBatchId");
 
                     b.HasIndex("NetworkBatchId");
 
+                    b.HasIndex("ParentPeriodRunId");
+
                     b.HasIndex("ProcessorBatchId");
 
                     b.HasIndex("SchemeProfileId");
+
+                    b.HasIndex("SecondaryOfRunId")
+                        .IsUnique()
+                        .HasFilter("[SecondaryOfRunId] IS NOT NULL");
 
                     b.HasIndex("Function", "PeriodKey");
 
@@ -944,6 +977,9 @@ namespace Recon.Web.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<int?>("GlStagingId")
+                        .HasColumnType("int");
+
                     b.Property<string>("Narrative")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -952,6 +988,12 @@ namespace Recon.Web.Migrations
                     b.Property<string>("ProcessorAccountNumber")
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
+
+                    b.Property<byte?>("ProcessorSource")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int?>("ProcessorStagingId")
+                        .HasColumnType("int");
 
                     b.Property<int>("ReconRunId")
                         .HasColumnType("int");
@@ -984,6 +1026,10 @@ namespace Recon.Web.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("ReconExceptionId");
+
+                    b.HasIndex("ReconRunId", "GlStagingId");
+
+                    b.HasIndex("ReconRunId", "ProcessorStagingId");
 
                     b.HasIndex("ReconRunId", "Status");
 
@@ -1072,8 +1118,14 @@ namespace Recon.Web.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<int?>("GlSourceBatchId")
+                        .HasColumnType("int");
+
                     b.Property<int?>("GlStagingId")
                         .HasColumnType("int");
+
+                    b.Property<DateOnly?>("GlValueDate")
+                        .HasColumnType("date");
 
                     b.Property<bool>("IsManuallyMatched")
                         .HasColumnType("bit");
@@ -1087,6 +1139,9 @@ namespace Recon.Web.Migrations
 
                     b.Property<byte>("MatchStatus")
                         .HasColumnType("tinyint");
+
+                    b.Property<bool>("MatchedAcrossPeriods")
+                        .HasColumnType("bit");
 
                     b.Property<string>("MicrofilmRefNumber")
                         .HasMaxLength(32)
@@ -1169,6 +1224,11 @@ namespace Recon.Web.Migrations
                     b.Property<decimal>("AmountTolerance")
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<int>("SettlementSpreadDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(20);
+
                     b.HasKey("ReconParametersId");
 
                     b.ToTable("ReconParameters");
@@ -1216,6 +1276,109 @@ namespace Recon.Web.Migrations
                     b.HasIndex("ReconRunId", "SettlementLeg", "Ccy", "Day");
 
                     b.ToTable("ReconPassSummaries");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconPeriodRun", b =>
+                {
+                    b.Property<int>("ReconPeriodRunId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconPeriodRunId"));
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte>("Function")
+                        .HasColumnType("tinyint");
+
+                    b.Property<string>("PeriodKey")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
+
+                    b.Property<DateTime?>("RolledUpDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("RolledUpRunId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SchemeProfileId")
+                        .HasColumnType("int");
+
+                    b.Property<byte>("Status")
+                        .HasColumnType("tinyint");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ReconPeriodRunId");
+
+                    b.HasIndex("Function", "PeriodKey", "SchemeProfileId");
+
+                    b.ToTable("ReconPeriodRuns");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconRunPass", b =>
+                {
+                    b.Property<int>("ReconRunPassId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ReconRunPassId"));
+
+                    b.Property<int>("Added")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Ambiguous")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<byte>("Kind")
+                        .HasColumnType("tinyint");
+
+                    b.Property<int>("ReconRunId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("RunAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("RunGroup")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TargetPeriodKey")
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
+
+                    b.Property<int?>("TargetRunId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ReconRunPassId");
+
+                    b.HasIndex("ReconRunId", "Kind");
+
+                    b.ToTable("ReconRunPasses");
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconWorkflowActor", b =>
@@ -1576,6 +1739,9 @@ namespace Recon.Web.Migrations
                     b.Property<string>("TranRmks")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<DateOnly?>("ValueDate")
+                        .HasColumnType("date");
+
                     b.Property<DateTime?>("VfdDate")
                         .HasColumnType("datetime2");
 
@@ -1672,6 +1838,9 @@ namespace Recon.Web.Migrations
                     b.Property<string>("TranRmks")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<DateOnly?>("ValueDate")
+                        .HasColumnType("date");
+
                     b.Property<DateTime?>("VfdDate")
                         .HasColumnType("datetime2");
 
@@ -1703,8 +1872,16 @@ namespace Recon.Web.Migrations
                     b.Property<int?>("BillingCcy")
                         .HasColumnType("int");
 
+                    b.Property<string>("CardAccountEntityId")
+                        .HasMaxLength(19)
+                        .HasColumnType("nvarchar(19)");
+
                     b.Property<string>("CardAccountNumber")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("CardIdentityToken")
+                        .HasMaxLength(72)
+                        .HasColumnType("nvarchar(72)");
 
                     b.Property<string>("CardNumberHashed")
                         .HasColumnType("nvarchar(max)");
@@ -2356,6 +2533,17 @@ namespace Recon.Web.Migrations
                 });
 
             modelBuilder.Entity("Recon.Web.Domain.Recon.ReconPassSummary", b =>
+                {
+                    b.HasOne("Recon.Web.Domain.Import.ReconRun", "ReconRun")
+                        .WithMany()
+                        .HasForeignKey("ReconRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ReconRun");
+                });
+
+            modelBuilder.Entity("Recon.Web.Domain.Recon.ReconRunPass", b =>
                 {
                     b.HasOne("Recon.Web.Domain.Import.ReconRun", "ReconRun")
                         .WithMany()

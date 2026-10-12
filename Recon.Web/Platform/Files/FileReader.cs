@@ -21,17 +21,18 @@ public sealed class HeaderMap
     {
         _map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, column) in entries)
-            if (!string.IsNullOrWhiteSpace(name) && !_map.ContainsKey(name.Trim()))
-                _map[name.Trim()] = column;
+            if (!string.IsNullOrWhiteSpace(name) && !_map.ContainsKey(Normalize(name)))
+                _map[Normalize(name)] = column;
     }
 
     public int ColumnCount => _map.Count;
 
-    public bool TryGetColumn(string name, out int column) => _map.TryGetValue(name, out column);
+    private static string Normalize(string name) => string.Join(" ", name.Replace('_', ' ').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    public bool TryGetColumn(string name, out int column) => _map.TryGetValue(Normalize(name), out column);
 
     /// <summary>Reads a raw cell value by header name; null when the column is absent or blank.</summary>
     public object? Cell(IImportRow row, string name) =>
-        _map.TryGetValue(name, out var col) ? row.GetCell(col) : null;
+        _map.TryGetValue(Normalize(name), out var col) ? row.GetCell(col) : null;
 
     /// <summary>True when every mapped column of the row is empty — trailing/blank worksheet rows
     /// are skipped so they cannot become zero-value reconciliation exceptions.</summary>

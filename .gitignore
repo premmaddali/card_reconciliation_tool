@@ -9,3 +9,9 @@ SharedFiles/
 .tmpbuild/
 .tmpobj/
 .claude/
+
+# Local validation / scratch build outputs
+.validation-build/
+
+# Publish / build artifacts
+artifacts/

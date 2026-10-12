@@ -16,6 +16,7 @@ public class StgGlEntry
     public string? GlAccount { get; set; }
     public string? AcctName { get; set; }
     public DateOnly? TranDate { get; set; }
+    public DateOnly? ValueDate { get; set; }
     public string? TranId { get; set; }
     public string? RefNum { get; set; }
     public string? TranParticular { get; set; }

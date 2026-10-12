@@ -17,17 +17,37 @@ public interface IReconEngine
     Task<ReconRunResult> RunAsync(ReconFunction function, int processorBatchId, int glBatchId,
         string periodKey, DateOnly? periodStart = null, DateOnly? periodEnd = null, CancellationToken ct = default,
         IProgress<ReconProgress>? progress = null, Func<ReconProgress, Task>? beforeAmbiguousPass = null, int? schemeProfileId = null,
-        bool applyAmountTolerance = false, decimal amountTolerance = 0m);
+        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true);
 }
 
 /// <summary>
 /// Weighted-confidence matcher. Amount and date are primary; the adapter-defined match key and channel add weight.
 /// Each processor transaction is scored against candidate GL cardholder-settlement rows of the same
-/// currency; the best available candidate above the threshold is assigned (greedy, highest score first).
+/// currency; a candidate is assigned only when it is the clear best choice on both sides.
 /// </summary>
 public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<MatchWeights> weights) : IReconEngine
 {
     private readonly MatchWeights _w = weights.Value;
+
+    private sealed record CandidatePair(decimal Score, string Breakdown, bool AmountOk, bool RefMatch,
+        ProcRow Processor, GlRow Gl, bool ToleranceApplied);
+
+    // Keep only the best two pairs per node. Counts retain ambiguity evidence without storing
+    // the complete candidate graph, which can be very large for common settlement amounts.
+    private sealed class CandidateChoices
+    {
+        public int Count;
+        public CandidatePair? Best;
+        public CandidatePair? RunnerUp;
+        public void Consider(CandidatePair pair)
+        {
+            Count++;
+            static int Compare(CandidatePair a, CandidatePair b) =>
+                a.RefMatch != b.RefMatch ? a.RefMatch.CompareTo(b.RefMatch) : a.Score.CompareTo(b.Score);
+            if (Best is null || Compare(pair, Best) > 0) { RunnerUp = Best; Best = pair; }
+            else if (RunnerUp is null || Compare(pair, RunnerUp) > 0) RunnerUp = pair;
+        }
+    }
 
     // ---- in-memory row shapes ------------------------------------------------
     private sealed class GlRow
@@ -40,6 +60,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         public DateTime? PostingDateTime;
         public string? Reference;   // adapter-defined standard match key
         public string? CreditReference; // Mastercard credit key: TranParticular2 after its twelve-character posting prefix
+        public string? CardNumber;
         public string? Description;
         public ReconSettlementLeg Leg;
         public bool IsCash;         // TranParticular starts CASH
@@ -51,6 +72,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     {
         public int Id;
         public string? AccountNumber;
+        public string? CardNumber;
         public StagingSource Source;
         public int? OriginalCcy;
         public decimal OriginalAmount; // abs transaction amount, retained for traceability
@@ -78,12 +100,16 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     public async Task<ReconRunResult> RunAsync(ReconFunction function, int processorBatchId, int glBatchId,
         string periodKey, DateOnly? periodStart = null, DateOnly? periodEnd = null, CancellationToken ct = default,
         IProgress<ReconProgress>? progress = null, Func<ReconProgress, Task>? beforeAmbiguousPass = null, int? schemeProfileId = null,
-        bool applyAmountTolerance = false, decimal amountTolerance = 0m)
+        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true)
     {
         if (function == ReconFunction.AtmToGl)
             throw new InvalidOperationException("ATM-to-GL reconciliation is not available: Mastercard currently has no ATM General Ledger. Use Network ↔ ATM reconciliation instead.");
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        if (_w.AmountTolerance < 0 || _w.MinimumScoreGap <= 0 || amountTolerance < 0 || _w.DateToleranceDays is < 0 or > 365)
+            throw new InvalidOperationException("Amount tolerance must be nonnegative and the candidate score gap must be positive.");
+        await MatchingPeriod.ValidateAsync(db, function, processorBatchId, glBatchId, periodKey, periodStart, periodEnd, schemeProfileId, ct, enforcePostingPeriod);
 
         var run = new ReconRun
         {
@@ -99,7 +125,15 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         try
         {
+            await using var assignmentTransaction = await db.Database.BeginTransactionAsync(ct);
+            await GlAssignmentLock.AcquireAsync(db, ct);
             var gl = await LoadGlAsync(db, glBatchId, function, ct);
+            if (!await db.NormalizedGlEntries.AnyAsync(x => x.ImportBatchId == glBatchId, ct))
+            {
+                var reserved = (await db.ReconMatches.Where(x => x.MatchedAcrossPeriods && x.GlStagingId != null && x.ReconRun.ProcessorBatchId != processorBatchId)
+                    .Select(x => x.GlStagingId!.Value).ToListAsync(ct)).ToHashSet();
+                gl.RemoveAll(x => reserved.Contains(x.Id));
+            }
             var proc = await LoadProcessorAsync(db, processorBatchId, function, ct);
             progress?.Report(new("Preparing match candidates…", 0, proc.Count, 0));
 
@@ -123,6 +157,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             run.CompletedDate = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
+            await assignmentTransaction.CommitAsync(ct);
             return new ReconRunResult(run.ReconRunId, proc.Count, matchedRows.Count, exceptions.Count, run.AverageConfidence);
         }
         catch
@@ -160,8 +195,13 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var raw = await db.NormalizedGlEntries
             .Where(g => g.ImportBatchId == glBatchId)
-            .Select(g => new { g.NormalizedGlEntryId, g.Account, g.Currency, g.Amount, g.PostingDate, g.PostingDateTime, g.Reference, g.Description, g.SettlementLeg, g.IsCash, g.IsPos })
+            .Select(g => new { g.NormalizedGlEntryId, g.SourceStagingId, g.SourceTable, g.Account, g.Currency, g.Amount, g.PostingDate, g.PostingDateTime, g.Reference, g.Description, g.SettlementLeg, g.IsCash, g.IsPos })
             .ToListAsync(ct);
+
+        var nativeCurrencies = await db.StgGlEntries.Where(g => g.ImportBatchId == glBatchId)
+            .Select(g => new { g.StgGlEntryId, g.TranCcyCode }).ToDictionaryAsync(g => g.StgGlEntryId, g => g.TranCcyCode, ct);
+        var nativeCards = await db.StgGlEntries.Where(g => g.ImportBatchId == glBatchId)
+            .Select(g => new { g.StgGlEntryId, g.TranRmks, g.TranParticular }).ToDictionaryAsync(g => g.StgGlEntryId, g => g, ct);
 
         var rows = new List<GlRow>(raw.Count);
         foreach (var g in raw)
@@ -173,14 +213,17 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             {
                 Id = checked((int)g.NormalizedGlEntryId),
                 AcctNum = g.Account,
-                Ccy = g.Currency,
+                CardNumber = g.SourceTable == nameof(StgGlEntry) && g.SourceStagingId is int cardId && nativeCards.TryGetValue(cardId, out var remarks) ? CardIdentity.Normalize(remarks.TranRmks) : null,
+                Ccy = g.SourceTable == nameof(StgGlEntry) && g.SourceStagingId is int nativeId && nativeCurrencies.TryGetValue(nativeId, out var nativeCurrency)
+                    ? MatchingEvidence.GlCurrency(nativeCurrency) : g.Currency,
                 Leg = (ReconSettlementLeg)g.SettlementLeg,
                 Amount = g.Amount,
                 Date = g.PostingDate,
                 PostingDateTime = g.PostingDateTime,
                 Reference = g.Reference,
                 CreditReference = MastercardCreditGlKey(g.Reference),
-                Description = g.Description,
+                Description = g.SourceTable == nameof(StgGlEntry) && g.SourceStagingId is int descriptionId && nativeCards.TryGetValue(descriptionId, out var native)
+                    ? CombineDescription(native.TranParticular, native.TranRmks) : g.Description,
                 IsCash = g.IsCash,
                 IsPos = g.IsPos
             });
@@ -199,7 +242,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var raw = await db.StgGlEntries
             .Where(g => g.ImportBatchId == glBatchId && g.AcctNum != null && accts.Keys.Contains(g.AcctNum))
-            .Select(g => new { g.StgGlEntryId, g.AcctNum, g.TranAmt, g.TranDate, g.EntryDate, g.VfdDate, g.TranParticular, g.TranParticular2, g.TranRmks })
+            .Select(g => new { g.StgGlEntryId, g.AcctNum, g.TranAmt, g.TranCcyCode, g.TranDate, g.EntryDate, g.VfdDate, g.TranParticular, g.TranParticular2, g.TranRmks })
             .ToListAsync(ct);
 
         var rows = new List<GlRow>(raw.Count);
@@ -215,9 +258,9 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             {
                 Id = g.StgGlEntryId,
                 AcctNum = g.AcctNum,
-                // These cardholder accounts are denominated by card currency, but their GL amounts
-                // are posted in MUR.  Do not use the account denomination to compare amounts.
-                Ccy = 480,
+                CardNumber = CardIdentity.Normalize(g.TranRmks),
+                // Compare the currency attached to the posted amount, not account denomination.
+                Ccy = MatchingEvidence.GlCurrency(g.TranCcyCode),
                 Leg = accts[g.AcctNum!],
                 Amount = Math.Abs(g.TranAmt ?? 0m),
                 Date = g.TranDate,
@@ -251,7 +294,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var rows = await db.NormalizedTransactions
             .Where(t => t.ImportBatchId == batchId)
-            .Select(t => new { t.NormalizedTransactionId, t.SourceStagingId, t.MaskedCardNumber, t.CardType, t.Merchant, t.Currency, t.Amount, t.BillingAmount, t.BillingCurrency, t.SettlementAmount, t.SettlementCurrency, t.PostingDate, t.TransactionDate, t.TransactionDateTime, t.Reference, t.TraceNumber, t.Description, t.TransactionType, t.IsCash, t.IsPos, t.SettlementLeg })
+            .Select(t => new { t.NormalizedTransactionId, t.Processor, t.SourceStagingId, t.MaskedCardNumber, t.CardType, t.Merchant, t.Currency, t.Amount, t.BillingAmount, t.BillingCurrency, t.SettlementAmount, t.SettlementCurrency, t.PostingDate, t.TransactionDate, t.TransactionDateTime, t.Reference, t.TraceNumber, t.Description, t.TransactionType, t.IsCash, t.IsPos, t.SettlementLeg })
             .ToListAsync(ct);
 
         // BankOne marks On-Us ATM withdrawals with Origin code 0.  They are deliberately
@@ -264,6 +307,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             : [];
 
         var result = new List<ProcRow>(rows.Count);
+        var nativeCards = await db.StgInterchangeFees.Where(t => t.ImportBatchId == batchId)
+            .Select(t => new { t.StgInterchangeFeeId, t.CardAccountEntityId }).ToDictionaryAsync(t => t.StgInterchangeFeeId, t => t.CardAccountEntityId, ct);
         foreach (var x in rows)
         {
             if (x.SourceStagingId is int stagingId && onUsAtmStagingIds.Contains(stagingId)) continue;
@@ -273,7 +318,9 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
             // FX fallback chain: settlement → billing → transaction (adapter already normalized amounts).
             int? ccy = null; decimal amount = 0m; string? fxBasis = null;
-            if (x.SettlementCurrency is int sc && settlementCurrencies.Contains(sc))
+            if (x.Processor == "BankOne")
+                (ccy, amount, fxBasis) = MatchingEvidence.BillingValue(x.Currency, x.Amount, x.SettlementCurrency, x.SettlementAmount, x.BillingCurrency, x.BillingAmount);
+            else if (x.SettlementCurrency is int sc && settlementCurrencies.Contains(sc))
                 (ccy, amount, fxBasis) = (sc, Math.Abs(x.SettlementAmount ?? 0m), "settlement");
             else if (x.BillingCurrency is int bc && settlementCurrencies.Contains(bc))
                 (ccy, amount, fxBasis) = (bc, Math.Abs(x.BillingAmount ?? 0m), "billing");
@@ -284,6 +331,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             {
                 Id = checked((int)x.NormalizedTransactionId),
                 AccountNumber = x.MaskedCardNumber,
+                CardNumber = x.Processor == "BankOne" && x.SourceStagingId is int cardId && nativeCards.TryGetValue(cardId, out var cardToken) ? cardToken : null,
                 Source = StagingSource.InterchangeFee, // provenance kept via NormalizedTransactionId + batch
                 Leg = (ReconSettlementLeg)x.SettlementLeg,
                 OriginalCcy = x.Currency,
@@ -358,7 +406,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var ir = await db.StgInterchangeFees
             .Where(x => x.ImportBatchId == batchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0"))
-            .Select(x => new { x.StgInterchangeFeeId, x.CardAccountNumber, x.CardNumberHashed, x.ProductType, x.MerchantAcronym, x.TxnCcy, x.TxnAmount, x.BillingCcy, x.BillingAmount, x.SettlementCcy, x.SettlementAmount, x.ProcessingDate, x.TransactionDate, x.ReferenceNumber, x.MicrofilmRefNumber, x.TransactionCode, x.TransactionWording })
+            .Select(x => new { x.StgInterchangeFeeId, x.CardAccountNumber, x.CardNumberHashed, x.CardAccountEntityId, x.ProductType, x.MerchantAcronym, x.TxnCcy, x.TxnAmount, x.BillingCcy, x.BillingAmount, x.SettlementCcy, x.SettlementAmount, x.ProcessingDate, x.TransactionDate, x.ReferenceNumber, x.MicrofilmRefNumber, x.TransactionCode, x.TransactionWording })
             .ToListAsync(ct);
         return ir.Select(x =>
         {
@@ -369,6 +417,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             {
                 Id = x.StgInterchangeFeeId,
                 AccountNumber = x.CardAccountNumber ?? x.CardNumberHashed,
+                CardNumber = x.CardAccountEntityId,
                 Source = StagingSource.InterchangeFee,
                 Leg = string.Equals(x.ProductType, "CR", StringComparison.OrdinalIgnoreCase) ? ReconSettlementLeg.CreditIntermediary : ReconSettlementLeg.DebitCardholder,
                 OriginalCcy = x.TxnCcy,
@@ -407,7 +456,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         // Index GL by reconciliation leg + currency/amount and leg + adapter-defined match key. Product type
         // has already routed each processor transaction to its one applicable settlement leg.
-        var byAmount = new Dictionary<(ReconSettlementLeg, int, long), List<GlRow>>();
+        var byAmount = gl.Where(g => g.Date.HasValue).GroupBy(g => (g.Leg, g.Ccy, g.Date!.Value.DayNumber))
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.Amount).ToArray());
         var byRef = new Dictionary<(ReconSettlementLeg, string), List<GlRow>>();
         void AddReference(string? reference, GlRow row)
         {
@@ -416,10 +466,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         }
         foreach (var g in gl)
         {
-            var key = (g.Leg, g.Ccy, Cents(g.Amount));
-            (byAmount.TryGetValue(key, out var l1) ? l1 : byAmount[key] = new()).Add(g);
-            AddReference(g.Reference, g);
-            AddReference(g.CreditReference, g);
+            AddReference(g.Leg == ReconSettlementLeg.CreditIntermediary ? g.CreditReference : g.Reference, g);
         }
 
         var matches = new List<ReconMatch>(proc.Count);
@@ -476,10 +523,10 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         // Fast pass: a reference is safe to assign immediately only when it occurs exactly once
         // in both sources.  Duplicates deliberately remain for the scored pass below.
-        // A repeated reference can be an original, cash transaction, or credit. Transaction code is
-        // part of the processor identity, so only repeats of the same key *and* code are duplicates.
+        // Distinct transaction codes may share a reference, but must compete for GL evidence.
+        // Only one processor across all event codes may enter this immediate-assignment pass.
         var procByRef = proc.Where(p => !string.IsNullOrEmpty(p.MatchKey))
-            .GroupBy(p => (p.MatchKey!, p.TransactionCode ?? ""))
+            .GroupBy(p => (p.Leg, p.MatchKey!))
             .ToDictionary(g => g.Key, g => g.ToList());
         var uniqueResolved = 0;
         foreach (var (_, procRows) in procByRef)
@@ -489,6 +536,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             if (!byRef.TryGetValue((p.Leg, p.MatchKey!), out var glRows) || glRows.Count != 1) continue;
 
             var g = glRows[0];
+            if (g.Used || p.Ccy is null || p.Ccy <= 0 || p.Ccy != g.Ccy || !ReferenceMatches(p, g) || !ReferencesCompatible(p, g)) continue;
             var (score, breakdown, amountOk, toleranceApplied) = Score(p, g, window, amountTolerance);
             g.Used = true;
             matchedProc.Add(p.Id);
@@ -512,24 +560,34 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         // Scored pass: only unresolved rows enter candidate generation.  This is where duplicate,
         // ambiguous and reference-less records are evaluated.
-        var pairs = new List<(decimal score, string breakdown, bool amountOk, bool refMatch, ProcRow p, GlRow g, bool toleranceApplied)>();
+        var procChoices = new Dictionary<int, CandidateChoices>();
+        var glChoices = new Dictionary<int, CandidateChoices>();
         var evaluated = uniqueResolved;
         foreach (var p in proc)
         {
             if (matchedProc.Contains(p.Id)) continue;
             var seen = new HashSet<GlRow>();
             IEnumerable<GlRow> candidates = [];
-            if (p.Ccy is int ccy && byAmount.TryGetValue((p.Leg, ccy, Cents(p.Amount)), out var byAmt))
-                candidates = byAmt;
+            if (p.Ccy is int ccy && p.Date is { } processorDate)
+                candidates = Enumerable.Range(-window, 2 * window + 1)
+                    .SelectMany(offset => byAmount.TryGetValue((p.Leg, ccy, processorDate.DayNumber + offset), out var byAmt)
+                        ? AmountCandidates(byAmt, p.Amount, amountTolerance) : []);
             if (!string.IsNullOrEmpty(p.MatchKey) && byRef.TryGetValue((p.Leg, p.MatchKey), out var byRf))
                 candidates = candidates.Concat(byRf);
 
             foreach (var g in candidates)
             {
-                if (!seen.Add(g)) continue;
+                if (g.Used || !seen.Add(g) || p.Ccy is null || p.Ccy <= 0 || p.Ccy != g.Ccy || !ReferencesCompatible(p, g)) continue;
                 var (score, breakdown, amountOk, toleranceApplied) = Score(p, g, window, amountTolerance);
                 var refMatch = ReferenceMatches(p, g);
-                if (score > 0) pairs.Add((score, breakdown, amountOk, refMatch, p, g, toleranceApplied));
+                if (refMatch || (amountOk && score >= _w.MatchThreshold))
+                {
+                    var pair = new CandidatePair(score, breakdown, amountOk, refMatch, p, g, toleranceApplied);
+                    if (!procChoices.TryGetValue(p.Id, out var processorChoice)) procChoices[p.Id] = processorChoice = new();
+                    if (!glChoices.TryGetValue(g.Id, out var glChoice)) glChoices[g.Id] = glChoice = new();
+                    processorChoice.Consider(pair);
+                    glChoice.Consider(pair);
+                }
             }
             evaluated++;
             if (evaluated % 500 == 0 || evaluated == proc.Count)
@@ -540,24 +598,26 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             }
         }
 
-        pairs.Sort((a, b) => b.score.CompareTo(a.score));
-
+        // A pair is assignable only when it is the clear best choice on BOTH sides.
+        // Do not resolve a tie by source order or by eliminating competing rows first.
         var assigned = uniqueResolved;
-        foreach (var (score, breakdown, amountOk, refMatch, p, g, toleranceApplied) in pairs)
+        foreach (var p in proc.Where(p => !matchedProc.Contains(p.Id)))
         {
-            if (g.Used || matchedProc.Contains(p.Id)) continue;
-            // Accept when amount ties and confidence clears the threshold, OR when the reference is an
-            // exact identity match (even if the amount differs — that surfaces as an amount mismatch).
-            var accept = (amountOk && score >= _w.MatchThreshold) || refMatch;
-            if (!accept) continue;
-
-            g.Used = true;
+            if (!procChoices.TryGetValue(p.Id, out var choices)) continue;
+            var best = choices.Best!;
+            var reverse = glChoices[best.Gl.Id];
+            bool Clear(decimal score, bool reference, decimal otherScore, bool otherReference) =>
+                reference && !otherReference || reference == otherReference && score - otherScore >= _w.MinimumScoreGap;
+            if (choices.RunnerUp is { } next && !Clear(best.Score, best.RefMatch, next.Score, next.RefMatch)) continue;
+            if (reverse.Best!.Processor.Id != p.Id || (reverse.RunnerUp is { } rival && !Clear(best.Score, best.RefMatch, rival.Score, rival.RefMatch))) continue;
+            if (best.Gl.Used) continue;
+            best.Gl.Used = true;
             matchedProc.Add(p.Id);
-            RecordAssignment(p, g, score, breakdown, amountOk, toleranceApplied);
+            RecordAssignment(p, best.Gl, best.Score, best.Breakdown, best.AmountOk, best.ToleranceApplied);
             assigned++;
             if (assigned % 500 == 0)
             {
-                progress?.Report(new("Assigning best matches…", proc.Count, proc.Count, matchedCount));
+                progress?.Report(new("Assigning unambiguous matches…", proc.Count, proc.Count, matchedCount));
                 ct.ThrowIfCancellationRequested();
                 await Task.Yield();
             }
@@ -567,6 +627,11 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         foreach (var p in proc)
         {
             if (matchedProc.Contains(p.Id)) continue;
+            var optionCount = procChoices.TryGetValue(p.Id, out var choices) ? choices.Count : 0;
+            var unresolvedStatus = optionCount > 0 ? MatchStatus.Ambiguous : MatchStatus.UnmatchedProcessor;
+            var narrative = optionCount > 0
+                ? $"Review required: {optionCount} eligible GL candidates; no clear mutual best assignment."
+                : $"No GL settlement entry found in the {p.Leg} leg for processor transaction {p.Reference} ({p.Amount:N2}).";
             matches.Add(new ReconMatch
             {
                 SettlementLeg = p.Leg,
@@ -577,7 +642,9 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 ProcessorProductType = p.ProductType,
                 ProcessorMerchant = p.Merchant,
                 ProcessorDescription = p.Description,
-                MatchStatus = MatchStatus.UnmatchedProcessor,
+                MatchStatus = unresolvedStatus,
+                MatchComment = narrative,
+                ScoreBreakdown = narrative,
                 Confidence = 0m,
                 ProcessorStagingId = p.Id,
                 ProcessorSource = p.Source,
@@ -592,8 +659,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 ProcessorTransactionDateTime = p.TransactionDateTime,
                 Ccy = p.Ccy
             });
-            exceptions.Add(Exc(runId, p, p.Leg, MatchStatus.UnmatchedProcessor, 0m,
-                $"No GL settlement entry found in the {p.Leg} leg for processor transaction {p.Reference} ({p.Amount:N2}{(p.FxBasis is null ? "" : $", {p.FxBasis} currency")}).", null, null));
+            exceptions.Add(Exc(runId, p, p.Leg, unresolvedStatus, 0m, narrative, null, null));
         }
 
         // GL cardholder rows no processor transaction claimed.
@@ -605,6 +671,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 ReconRunId = runId,
                 ReferenceNumber = Cap(g.Reference),
                 GlAccountNumber = g.AcctNum,
+                GlStagingId = g.Id,
                 SettlementLeg = g.Leg,
                 ExceptionType = MatchStatus.UnmatchedGl,
                 Ccy = g.Ccy,
@@ -651,13 +718,18 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 score = _w.ReferenceIdentityConfidence;
                 parts.Add("exact reference baseline");
             }
-            // An exact reference establishes the 75% identity baseline; a corroborating amount
-            // must increase confidence rather than being swallowed by that baseline.
+            // Corroborating amount improves identity evidence without hiding date disagreement.
             if (amountOk)
-                score = Math.Max(score, _w.ReferenceIdentityConfidence + _w.Amount);
+                score = Math.Max(score, _w.ReferenceIdentityConfidence + _w.Reference);
         }
 
         var channelOk = (p.IsCash && g.IsCash) || (p.IsPos && g.IsPos);
+        if (p.CardNumber is not null && p.CardNumber == g.CardNumber && amountOk && p.Date is { } cardDate &&
+            g.Date is { } glDate && Math.Abs(cardDate.DayNumber - glDate.DayNumber) <= window)
+        {
+            score += _w.Card;
+            parts.Add("card identity agrees");
+        }
         if (channelOk) { score += _w.Channel; parts.Add("channel agrees"); }
 
         return (Math.Min(100m, score), string.Join(", ", parts), amountOk, toleranceApplied);
@@ -668,6 +740,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         ReconRunId = runId,
         ReferenceNumber = p.Reference,
         ProcessorAccountNumber = p.AccountNumber,
+        ProcessorStagingId = p.Id,
+        ProcessorSource = p.Source,
         GlAccountNumber = glAccount,
         SettlementLeg = leg,
         ExceptionType = type,
@@ -685,7 +759,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     // GL settlement currencies; every other transaction currency collapses into one "Other" bucket (0).
     private static int CcyBucket(int? ccy) => ccy is 480 or 840 or 978 ? ccy.Value : 0;
 
-    private static List<ReconPassSummary> BuildSummaries(int runId, List<ReconMatch> matches)
+    internal static List<ReconPassSummary> BuildSummaries(int runId, List<ReconMatch> matches)
     {
         var list = new List<ReconPassSummary>();
 
@@ -720,10 +794,29 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         };
     }
 
-    private static long Cents(decimal amount) => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
+    private static IEnumerable<GlRow> AmountCandidates(GlRow[] rows, decimal amount, decimal tolerance)
+    {
+        var lower = amount - tolerance;
+        int lo = 0, hi = rows.Length;
+        while (lo < hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (rows[mid].Amount < lower) lo = mid + 1;
+            else hi = mid;
+        }
+        for (var i = lo; i < rows.Length && rows[i].Amount <= amount + tolerance; i++)
+            yield return rows[i];
+    }
 
     private static bool ReferenceMatches(ProcRow p, GlRow g) => !string.IsNullOrEmpty(p.MatchKey) &&
         p.MatchKey == (p.Leg == ReconSettlementLeg.CreditIntermediary ? g.CreditReference : g.Reference);
+
+    private static bool ReferencesCompatible(ProcRow p, GlRow g)
+    {
+        var glKey = p.Leg == ReconSettlementLeg.CreditIntermediary ? g.CreditReference : g.Reference;
+        return (p.CardNumber is null || g.CardNumber is null || p.CardNumber == g.CardNumber) &&
+            (string.IsNullOrEmpty(p.MatchKey) || string.IsNullOrEmpty(glKey) || p.MatchKey == glKey);
+    }
 
     private static string? DisplayGlDescription(ProcRow p, GlRow g)
     {
@@ -747,27 +840,13 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     }
 
     /// <summary>
-    /// The BankOne cardholder-settlement GL holds the billing amount (including when the account
-    /// itself carries a USD/EUR label). Its currency label is not dependable for the posted value,
-    /// which is presented as MUR on the reconciliation. Fall back only when billing is absent.
+    /// BankOne uses billing evidence first. Preserve its recorded currency instead of relabelling it.
     /// </summary>
     private static (int? Ccy, decimal Amount, string? FxBasis) ReconciliationValue(
         int? txnCcy, decimal? txnAmount, int? settlementCcy, decimal? settlementAmount,
         int? billingCcy, decimal? billingAmount, ISet<int> settlementCurrencies)
     {
-        if (billingAmount.HasValue)
-            return (480, Math.Abs(billingAmount.Value), "billing");
-
-        if (txnCcy is int ccy && settlementCurrencies.Contains(ccy))
-            return (ccy, Math.Abs(txnAmount ?? 0m), null);
-
-        if (settlementCcy is int settleCcy && settlementCurrencies.Contains(settleCcy) && settlementAmount.HasValue)
-            return (settleCcy, Math.Abs(settlementAmount.Value), "settlement");
-
-        if (billingCcy is int billCcy && settlementCurrencies.Contains(billCcy) && billingAmount.HasValue)
-            return (billCcy, Math.Abs(billingAmount.Value), "billing");
-
-        return (txnCcy, Math.Abs(txnAmount ?? 0m), null);
+        return MatchingEvidence.BillingValue(txnCcy, txnAmount, settlementCcy, settlementAmount, billingCcy, billingAmount);
     }
 
     /// <summary>Reference/particular fields are stored in a 32-char column; guard against longer text.</summary>
@@ -776,7 +855,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     private static string? CombineDescription(string? narrative, string? remarks)
     {
         var first = narrative?.Trim();
-        var second = remarks?.Trim();
+        var second = CardIdentity.Display(remarks)?.Trim();
         if (string.IsNullOrEmpty(first)) return string.IsNullOrEmpty(second) ? null : second;
         return string.IsNullOrEmpty(second) || string.Equals(first, second, StringComparison.OrdinalIgnoreCase) ? first : $"{first} · {second}";
     }

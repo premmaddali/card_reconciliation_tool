@@ -18,6 +18,12 @@
         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Maximum difference</label>
         <input type="number" step="0.01" min="0" @bind="_amountTolerance" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
     </div>
+    <h2 class="mt-6 text-sm font-semibold text-gray-900 dark:text-white">Settlement spread (daily / period reconciliation)</h2>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">How many days a transaction date and a GL value date may differ and still be reconciled as the same settlement. Bounds the rolling match pool for daily and period runs; items older than this with no counterpart are treated as aged exceptions. Does not affect classic monthly batches.</p>
+    <div class="mt-5 max-w-xs">
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Spread (days)</label>
+        <input type="number" step="1" min="0" max="120" @bind="_settlementSpreadDays" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+    </div>
     <div class="mt-5 flex items-center gap-3"><button type="button" @onclick="Save" disabled="@_saving" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Save parameters</button>@if (_message is not null) { <span class="text-sm text-emerald-600">@_message</span> }</div>
 </div>
 
@@ -42,6 +48,7 @@
 
 @code {
     private decimal _amountTolerance;
+    private int _settlementSpreadDays = 20;
     private bool _saving;
     private string? _message;
     private List<SchemeProfile> _schemes = [];
@@ -58,13 +65,15 @@
         _transactionAdapter = _transactionAdapters.FirstOrDefault()?.Code ?? "";
         _glcAdapter = _glcAdapters.FirstOrDefault()?.Code ?? "";
         await using var db = await DbFactory.CreateDbContextAsync();
-        _amountTolerance = await db.ReconParameters.Select(x => x.AmountTolerance).FirstOrDefaultAsync();
+        var settings = await db.ReconParameters.Select(x => new { x.AmountTolerance, x.SettlementSpreadDays }).FirstOrDefaultAsync();
+        _amountTolerance = settings?.AmountTolerance ?? 0m;
+        _settlementSpreadDays = settings?.SettlementSpreadDays ?? 20;
         _schemes = await db.SchemeProfiles.OrderBy(x => x.Scheme).ToListAsync();
     }
 
     private async Task Save()
     {
-        if (_amountTolerance < 0) return;
+        if (_amountTolerance < 0 || _settlementSpreadDays < 0 || _settlementSpreadDays > 120) return;
         _saving = true; _message = null;
         try
         {
@@ -72,8 +81,9 @@
             var settings = await db.ReconParameters.FirstOrDefaultAsync();
             if (settings is null) { settings = new ReconParameters(); db.ReconParameters.Add(settings); }
             settings.AmountTolerance = Math.Round(_amountTolerance, 4);
+            settings.SettlementSpreadDays = _settlementSpreadDays;
             await db.SaveChangesAsync();
-            _message = "Parameters saved. New runs can opt in to this amount tolerance.";
+            _message = "Parameters saved.";
         }
         finally { _saving = false; }
     }

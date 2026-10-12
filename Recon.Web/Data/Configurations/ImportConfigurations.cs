@@ -26,6 +26,8 @@ public class ReconRunConfiguration : IEntityTypeConfiguration<ReconRun>
     public void Configure(EntityTypeBuilder<ReconRun> b)
     {
         b.HasKey(x => x.ReconRunId);
+        b.HasIndex(x => x.SecondaryOfRunId).IsUnique().HasFilter("[SecondaryOfRunId] IS NOT NULL");
+        b.HasIndex(x => x.CardOfRunId).IsUnique().HasFilter("[CardOfRunId] IS NOT NULL");
         b.Property(x => x.Function).HasConversion<byte>();
         b.Property(x => x.Status).HasConversion<byte>();
         b.Property(x => x.VerificationStatus).HasConversion<byte>();
@@ -34,6 +36,7 @@ public class ReconRunConfiguration : IEntityTypeConfiguration<ReconRun>
         b.Property(x => x.ResponsibleActor).HasMaxLength(250);
         b.Property(x => x.AverageConfidence).HasColumnType("decimal(5,2)");
         b.Property(x => x.AmountTolerance).HasColumnType("decimal(19,4)");
+        b.Property(x => x.PeriodGranularity).HasConversion<byte>().HasDefaultValue(PeriodGranularity.Month);
 
         b.HasOne(x => x.ProcessorBatch).WithMany().HasForeignKey(x => x.ProcessorBatchId).OnDelete(DeleteBehavior.NoAction);
         b.HasOne(x => x.GlBatch).WithMany().HasForeignKey(x => x.GlBatchId).OnDelete(DeleteBehavior.NoAction);
@@ -41,6 +44,7 @@ public class ReconRunConfiguration : IEntityTypeConfiguration<ReconRun>
         b.HasIndex(x => new { x.Function, x.PeriodKey });
         b.HasIndex(x => new { x.VerificationStatus, x.CurrentWorkflowStepId });
         b.HasIndex(x => x.SchemeProfileId);
+        b.HasIndex(x => x.ParentPeriodRunId);
     }
 }
 

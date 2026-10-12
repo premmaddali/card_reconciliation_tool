@@ -1,6 +1,8 @@
 @page "/recon/run/{RunId:int}"
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @inject NavigationManager Nav
+@inject Recon.Web.Services.Recon.SecondaryMatchService SecondaryMatching
+@inject ILogger<RunDetail> SecondaryLogger
 @inject Recon.Web.Services.Recon.IExceptionWorkflowService Workflow
 @inject Recon.Web.Services.Recon.IReconVerificationService Verification
 @inject Recon.Web.Services.Recon.IBatchArchiveService ArchiveService
@@ -36,6 +38,16 @@ else
         </div>
     </section>
 
+    @if (SourcePeriodAdjusted)
+    {
+        <div role="status" class="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">Period set to @PeriodLabel(_run) using processing/posting dates inside the uploaded files.</div>
+    }
+
+    @if (_run.Function == ReconFunction.InterchangeToGl && _run.Status == ReconRunStatus.Completed && _run.GlBatchId is not null)
+    {
+        <a href="@($"/recon/run/{RunId}/matching-review")" class="mb-5 inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-800 hover:bg-violet-100 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-200"><ChartIcon Class="h-4 w-4" />AI Analysis</a>
+    }
+
     <div class="verification-panel mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
         <div class="flex items-center gap-3"><span class="verification-panel-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"><CheckCircleIcon Class="h-5 w-5" /></span><div><p class="verification-panel-eyebrow text-xs font-semibold uppercase tracking-wide">Verification workflow</p><p class="verification-panel-text mt-1 text-sm font-semibold">@VerificationText()</p>@if (!string.IsNullOrWhiteSpace(_run.ResponsibleActor)) { <p class="verification-panel-subtext mt-0.5 text-xs">Responsible role(s): @_run.ResponsibleActor</p> }</div></div>
         @if (_run.VerificationStatus == ReconVerificationStatus.NotSubmitted)
@@ -48,6 +60,69 @@ else
         }
     </div>
     @if (_verificationError is not null) { <p class="-mt-3 mb-4 text-sm text-red-600">@_verificationError</p> }
+    @if (_passes.Count > 0)
+    {
+        <div class="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-900 dark:bg-emerald-950/30">
+            <p class="font-semibold text-emerald-900 dark:text-emerald-200">Refinements applied to this batch</p>
+            <ul class="mt-2 space-y-1">
+                @foreach (var p in _passes)
+                {
+                    <li @key="p.ReconRunPassId" class="flex items-center gap-2">
+                        <CheckCircleIcon Class="h-4 w-4 shrink-0 text-emerald-600" />
+                        <span>@PassName(p.Kind): <span class="font-semibold">@p.Added</span> additional match@(p.Added == 1 ? "" : "es")@(p.Ambiguous > 0 ? $", {p.Ambiguous} to review" : "") — @p.RunAt.ToLocalTime().ToString("dd MMM HH:mm")</span>
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+    @if (_secondaryResult is not null)
+    {
+        <p role="status" class="mb-4 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">@_secondaryResult</p>
+    }
+    @if (_secondaryError is not null)
+    {
+        <p role="status" class="mb-4 text-sm text-red-600">@_secondaryError</p>
+    }
+    @if (_canSecondaryMatch && _run.Function == ReconFunction.InterchangeToGl)
+    {
+        var busy = _secondaryBusy || _submitting || _archiving || _run.Status != ReconRunStatus.Completed || _run.IsArchived || _run.VerificationStatus != ReconVerificationStatus.NotSubmitted;
+        <div class="mb-5 flex flex-wrap items-center gap-3 text-sm">
+            @if (PassDone(ReconPassKind.SecondaryAmount))
+            {
+                <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"><CheckCircleIcon Class="h-4 w-4" /> Date/Amount/Cur processed (@PassAdded(ReconPassKind.SecondaryAmount))</span>
+            }
+            else
+            {
+                <button type="button" @onclick="RunSecondaryMatching" disabled="@busy" class="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Match Date/Amount/Cur</button>
+            }
+            @if (PassDone(ReconPassKind.CardNumber))
+            {
+                <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"><CheckCircleIcon Class="h-4 w-4" /> Card number processed (@PassAdded(ReconPassKind.CardNumber))</span>
+            }
+            else
+            {
+                <button type="button" @onclick="RunCardMatching" disabled="@busy" class="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Match with Card Number</button>
+            }
+            @if (PassDone(ReconPassKind.CrossPeriod))
+            {
+                <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"><CheckCircleIcon Class="h-4 w-4" /> Previous/Next period processed (@PassAdded(ReconPassKind.CrossPeriod))</span>
+            }
+            else
+            {
+                <button type="button" @onclick="RunAdjacentMatching" disabled="@busy" class="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Match Previous/Next Period</button>
+            }
+        </div>
+    }
+    @if (_secondaryBusy)
+    {
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+            <div class="flex flex-col items-center gap-3 rounded-2xl bg-white px-8 py-6 shadow-xl dark:bg-gray-800">
+                <RefreshIcon Class="h-8 w-8 animate-spin text-primary-600" />
+                <p class="text-sm font-semibold text-gray-900 dark:text-white">@(_secondaryProgress ?? "Working…")</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">Please wait — do not navigate away.</p>
+            </div>
+        </div>
+    }
     <div class="mb-5 flex flex-wrap justify-end gap-2">
         @if (_canArchive) { <button type="button" @onclick="ArchiveBatch" disabled="@_archiving" class="rounded-lg border border-amber-400 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:text-amber-200">Archive this batch</button> }
         @if (_canFreeze) { <button type="button" @onclick="FreezePeriod" disabled="@_archiving" class="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50">Freeze period and archive runs</button> }
@@ -260,7 +335,7 @@ else
                 <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                     @foreach (var m in _matches)
                     {
-                        <tr @key="m.ReconMatchId"><td class="px-3 py-2.5"><input type="checkbox" disabled="@(!CanManuallyMatch(m))" checked="@_selectedMatchIds.Contains(m.ReconMatchId)" @onchange="() => ToggleMatchSelection(m.ReconMatchId)" /></td><td class="px-5 py-2.5"><StatusBadge Text="@ResultLabel(m)" Color="@ResultColor(m)" /></td><td class="px-5 py-2.5 font-mono text-xs">@m.ReferenceNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.MicrofilmRefNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlParticular2</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.ProcessorTransactionDateTime, m.ProcessorDate)</td><td class="px-5 py-2.5 font-mono text-xs">@m.ProcessorAccountNumber</td><td class="px-5 py-2.5">@ProductTypeText(m.ProcessorProductType)</td><td class="max-w-40 truncate px-5 py-2.5 text-xs" title="@m.ProcessorMerchant">@m.ProcessorMerchant</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.ProcessorDescription">@m.ProcessorDescription</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlAccountNumber</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.GlDescription">@m.GlDescription</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ProcessorAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.ProcessorCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.BillingAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.BillingCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.SettlementAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.SettlementCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ReconciliationAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.Ccy)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateOnlyText(m.GlDate)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.GlPostingDateTime, null)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.GlAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.GlCcy ?? 480)</td><td class="px-5 py-2.5 text-right tabular-nums">@Difference(m)?.ToString("N2")</td><td class="max-w-48 truncate px-5 py-2.5 text-xs" title="@m.MatchComment">@m.MatchComment</td><td class="px-5 py-2.5 text-right tabular-nums">@m.Confidence.ToString("0.0")%</td><td class="sticky right-0 z-10 whitespace-nowrap bg-white px-5 py-2.5 text-right dark:bg-gray-800"><button type="button" @onclick="() => OpenMatchEvidence(m)" class="mr-1 rounded-lg border border-primary-200 px-2.5 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50">Evidence</button>@if (CanAddManualGl(m)) { <button type="button" @onclick="() => OpenManualGlDrawer(m)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Add GL &amp; match</button> } else if (CanManuallyMatch(m)) { <button type="button" @onclick="() => OpenSingleMatchDrawer(m.ReconMatchId)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Match</button> }</td></tr>
+                        <tr @key="m.ReconMatchId"><td class="px-3 py-2.5"><input type="checkbox" disabled="@(!CanManuallyMatch(m))" checked="@_selectedMatchIds.Contains(m.ReconMatchId)" @onchange="() => ToggleMatchSelection(m.ReconMatchId)" /></td><td class="px-5 py-2.5"><StatusBadge Text="@ResultLabel(m)" Color="@ResultColor(m)" /></td><td class="px-5 py-2.5 font-mono text-xs">@m.ReferenceNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.MicrofilmRefNumber</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlParticular2</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.ProcessorTransactionDateTime, m.ProcessorDate)</td><td class="px-5 py-2.5 font-mono text-xs">@m.ProcessorAccountNumber</td><td class="px-5 py-2.5">@ProductTypeText(m.ProcessorProductType)</td><td class="max-w-40 truncate px-5 py-2.5 text-xs" title="@m.ProcessorMerchant">@m.ProcessorMerchant</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.ProcessorDescription">@m.ProcessorDescription</td><td class="px-5 py-2.5 font-mono text-xs">@m.GlAccountNumber</td><td class="max-w-64 truncate px-5 py-2.5 text-xs" title="@m.GlDescription">@m.GlDescription</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ProcessorAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.ProcessorCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.BillingAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.BillingCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.SettlementAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.SettlementCcy)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.ReconciliationAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.Ccy)</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateOnlyText(m.GlDate)@if (m.GlValueDate.HasValue) { <span class="block text-xs text-gray-500">Value: @DateOnlyText(m.GlValueDate)</span> }</td><td class="px-5 py-2.5 whitespace-nowrap text-xs">@DateTimeText(m.GlPostingDateTime, null)</td><td class="px-5 py-2.5 text-right tabular-nums">@m.GlAmount?.ToString("N2")</td><td class="px-5 py-2.5">@CcyName(m.GlCcy ?? 480)</td><td class="px-5 py-2.5 text-right tabular-nums">@Difference(m)?.ToString("N2")</td><td class="max-w-48 truncate px-5 py-2.5 text-xs" title="@m.MatchComment">@m.MatchComment</td><td class="px-5 py-2.5 text-right tabular-nums">@ConfidenceLabel(m)</td><td class="sticky right-0 z-10 whitespace-nowrap bg-white px-5 py-2.5 text-right dark:bg-gray-800"><button type="button" @onclick="() => OpenMatchEvidence(m)" class="mr-1 rounded-lg border border-primary-200 px-2.5 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50">Evidence</button>@if (CanAddManualGl(m)) { <button type="button" @onclick="() => OpenManualGlDrawer(m)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Add GL &amp; match</button> } else if (CanManuallyMatch(m)) { <button type="button" @onclick="() => OpenSingleMatchDrawer(m.ReconMatchId)" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Match</button> }</td></tr>
                     }
                     @if (_matches.Count == 0) { <tr><td colspan="26" class="px-5 py-10 text-center text-gray-500">No results match the filter.</td></tr> }
                 </tbody>
@@ -490,6 +565,7 @@ else
 
 @code {
     [Parameter] public int RunId { get; set; }
+    [SupplyParameterFromQuery(Name = "sourcePeriodAdjusted")] public bool SourcePeriodAdjusted { get; set; }
 
     private enum Tab { Transactions, OnUsAtmTransactions, Gl, GlBulk, Reconciliation, NetworkValidation, NetworkTransactions }
     private Tab _tab = Tab.Reconciliation;
@@ -579,6 +655,44 @@ else
     private bool _submitting;
     private bool _archiving;
     private bool _canVerify;
+    private bool _canSecondaryMatch, _secondaryBusy;
+    private string? _secondaryError;
+    private string? _secondaryProgress;
+    private string? _secondaryResult;
+    private List<ReconRunPass> _passes = new();
+    private bool PassDone(ReconPassKind k) => _passes.Any(p => p.Kind == k);
+    private int PassAdded(ReconPassKind k) => _passes.Where(p => p.Kind == k).Sum(p => p.Added);
+    private static string PassName(ReconPassKind k) => k switch
+    {
+        ReconPassKind.SecondaryAmount => "Date/Amount/Cur",
+        ReconPassKind.CardNumber => "Card number",
+        _ => "Previous/Next period"
+    };
+
+    private Task RunSecondaryMatching() => RunMatching(false);
+    private Task RunAdjacentMatching() => RunMatching(true);
+    private Task RunCardMatching() => RunMatching(false, card: true);
+
+    private async Task RunMatching(bool adjacent, bool card = false)
+    {
+        if (_secondaryBusy) return;
+        _secondaryBusy = true; _secondaryError = null; _secondaryResult = null;
+        _secondaryProgress = card ? "Matching on card number…" : adjacent ? "Reconciling previous/next period…" : "Matching on date, amount and currency…";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var result = card ? await SecondaryMatching.RunCardAsync(RunId)
+                : adjacent ? await SecondaryMatching.RunAdjacentAsync(RunId) : await SecondaryMatching.RunAsync(RunId);
+            var label = card ? "Card-number matching" : adjacent ? "Previous/next period matching" : "Date/Amount/Cur matching";
+            _secondaryResult = $"{label}: {result.Added} additional match{(result.Added == 1 ? "" : "es")}" +
+                (result.Ambiguous > 0 ? $"; {result.Ambiguous} need review." : ".");
+            await OnParametersSetAsync(); // reload this same batch in place — no new batch is created
+        }
+        catch (UnauthorizedAccessException ex) { _secondaryError = ex.Message; }
+        catch (InvalidOperationException ex) { _secondaryError = ex.Message; }
+        catch (Exception ex) { SecondaryLogger.LogError(ex, "Secondary matching failed for run {RunId}", RunId); _secondaryError = "Secondary matching failed. No partial run was saved. Check the server logs and retry."; }
+        finally { _secondaryBusy = false; _secondaryProgress = null; }
+    }
     private bool _canArchive, _canFreeze, _canManualGlMatch;
     private string? _verificationError;
     private string? _archiveError;
@@ -685,12 +799,14 @@ else
     protected override async Task OnParametersSetAsync()
     {
         var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
+        _canSecondaryMatch = grants.TryGetValue("BULKRECON", out var bulkGrant) && bulkGrant.CanView && (bulkGrant.CanAdd || bulkGrant.CanEdit);
         _canArchive = grants.TryGetValue("ARCHIVE_BATCH", out var archiveGrant) && archiveGrant.CanEdit;
         _canFreeze = grants.TryGetValue("FREEZE_PERIOD", out var freezeGrant) && freezeGrant.CanEdit;
         _canManualGlMatch = grants.TryGetValue("MANUAL_GL_MATCH", out var manualGlGrant) && manualGlGrant.CanEdit;
         await using var db = await DbFactory.CreateDbContextAsync();
         _run = await db.ReconRuns.FirstOrDefaultAsync(r => r.ReconRunId == RunId);
         if (_run is null) return;
+        _passes = await db.ReconRunPasses.Where(p => p.ReconRunId == RunId).OrderBy(p => p.RunAt).ToListAsync();
         var userRoleIds = await db.UserAppAccesses.Where(x => x.UserId == CurrentUser.UserId && x.IsActive).Select(x => x.AppAccessId).ToListAsync();
         _canVerify = _run.VerificationStatus == ReconVerificationStatus.AwaitingVerification && _run.CurrentWorkflowStepId is not null
             && await db.ReconWorkflowActors.AnyAsync(a => a.ReconRunId == RunId && a.ReconWorkflowStepId == _run.CurrentWorkflowStepId
@@ -1702,8 +1818,13 @@ else
         var gl = match?.GlStagingId is int glId
             ? await db.StgGlEntries.FirstOrDefaultAsync(x => x.StgGlEntryId == glId)
             : await db.StgGlEntries.FirstOrDefaultAsync(x => x.ImportBatchId == _run.GlBatchId && x.TranParticular2 == reference && (glAccountNumber == null || x.AcctNum == glAccountNumber));
-        if (gl is not null) _glEvidence = new(glFile, gl.SourceRowNumber, gl.TranParticular2, gl.AcctNum,
-            gl.TranAmt?.ToString("N2") ?? "—", gl.TranParticular);
+        if (gl is not null)
+        {
+            var evidenceFile = gl.ImportBatchId == _run.GlBatchId ? glFile
+                : await db.ImportBatches.Where(x => x.ImportBatchId == gl.ImportBatchId).Select(x => x.FileName).FirstOrDefaultAsync() ?? glFile;
+            _glEvidence = new(evidenceFile, gl.SourceRowNumber, gl.TranParticular2, gl.AcctNum,
+                gl.TranAmt?.ToString("N2") ?? "—", gl.TranParticular);
+        }
     }
 
     private void CloseModal() { _selected = null; _evidenceOnly = false; _processorEvidence = null; _glEvidence = null; }
@@ -1838,7 +1959,11 @@ else
 
     private static bool IsToleranceMatch(ReconMatch match) => match.MatchStatus == MatchStatus.Matched
         && match.MatchComment?.StartsWith("Tolerance applied:", StringComparison.Ordinal) == true;
-    private static string ResultLabel(ReconMatch match) => IsToleranceMatch(match) ? "Matched with tolerance" : Humanize(match.MatchStatus);
+    private static string ConfidenceLabel(ReconMatch match) =>
+        !match.IsManuallyMatched && match.MatchStatus == MatchStatus.Matched && match.ScoreBreakdown?.StartsWith(Recon.Web.Services.Recon.SecondaryMatchService.MethodLabel) == true
+            ? $"Medium ({match.Confidence:0.0}%)" : $"{match.Confidence:0.0}%";
+
+    private static string ResultLabel(ReconMatch match) => match.MatchStatus == MatchStatus.Matched && !match.IsManuallyMatched && match.ScoreBreakdown?.StartsWith(Recon.Web.Services.Recon.SecondaryMatchService.CardMethodLabel) == true ? "Matched with Card Number" : match.MatchStatus == MatchStatus.Matched && match.ScoreBreakdown?.StartsWith(Recon.Web.Services.Recon.SecondaryMatchService.MethodLabel) == true ? "Matched Date/Amount/Cur" : IsToleranceMatch(match) ? "Matched with tolerance" : Humanize(match.MatchStatus);
     private static string ResultColor(ReconMatch match) => IsToleranceMatch(match) ? "green-soft" : match.MatchStatus == MatchStatus.Matched ? "green" : TypeColor(match.MatchStatus);
 
     private static string TypeColor(MatchStatus s) => s switch

@@ -16,6 +16,12 @@ public class StgInterchangeFee
     /// <summary>12-digit transaction join key.</summary>
     public string? ReferenceNumber { get; set; }
     public string? CardNumberHashed { get; set; }
+    /// <summary>Legacy token column retained for migration compatibility; no longer used.</summary>
+    [System.ComponentModel.DataAnnotations.MaxLength(72)]
+    public string? CardIdentityToken { get; set; }
+    /// <summary>Plain card number from CARD_ACCOUNT_ENTITY_ID.</summary>
+    [System.ComponentModel.DataAnnotations.MaxLength(19)]
+    public string? CardAccountEntityId { get; set; }
     public string? ProductCode { get; set; }
     public string? ProductType { get; set; }
     public string? ClientCode { get; set; }

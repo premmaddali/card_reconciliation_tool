@@ -196,9 +196,10 @@ public static class DbSeeder
             ("ATMRECON",   "ATM recon",        "/recon/atm",   "RECON",    1, "atm"),
             ("POSRECON",   "POS recon",        "/recon/pos",   "RECON",    2, "pos"),
             ("BULKRECON",  "Bulk recon",       "/recon/bulk",  "RECON",    3, "bulk"),
-            ("NETATMRECON", "Network ↔ ATM recon", "/recon/network-atm", "RECON", 4, "atm"),
-            ("EXCEPTIONS", "Exceptions",       "/exceptions",  "RECON",    5, "alert"),
-            ("ANALYSIS",   "Advanced analysis", "/analysis",    "RECON",    6, "analysis"),
+            ("DAILYRECON", "Daily / period recon", "/recon/daily", "RECON", 4, "bulk"),
+            ("NETATMRECON", "Network ↔ ATM recon", "/recon/network-atm", "RECON", 5, "atm"),
+            ("EXCEPTIONS", "Exceptions",       "/exceptions",  "RECON",    6, "alert"),
+            ("ANALYSIS",   "Advanced analysis", "/analysis",    "RECON",    7, "analysis"),
             ("DATA",       "Data",             null,           null,       7, null),
             ("IMPORT",     "Import files",     "/import",      "DATA",     1, "import"),
             ("BATCHES",    "Import batches",   "/batches",     "DATA",     2, "list"),
@@ -211,6 +212,7 @@ public static class DbSeeder
             ("ARCHIVE_BATCH", "Archive batch",  null,           "ADMIN", 6, null),
             ("FREEZE_PERIOD", "Freeze period",  null,           "ADMIN", 7, null),
             ("MANUAL_GL_MATCH", "Manual GL match", null,         "ADMIN", 8, null),
+            ("DATA_CLEANUP", "Data cleanup", "/admin/data-cleanup", "ADMIN", 9, "list"),
         };
 
         foreach (var (code, name, route, parent, seq, icon) in pages)
@@ -264,6 +266,7 @@ public static class DbSeeder
             ("Recon Officer", "ATMRECON",   true, true,  false, false),
             ("Recon Officer", "POSRECON",   true, true,  false, false),
             ("Recon Officer", "BULKRECON",  true, true,  false, false),
+            ("Recon Officer", "DAILYRECON", true, true,  false, false),
             ("Recon Officer", "NETATMRECON", true, true,  false, false),
             ("Recon Officer", "EXCEPTIONS", true, false, true,  false),
             ("Recon Officer", "ANALYSIS",   true, false, false, false),
@@ -275,6 +278,7 @@ public static class DbSeeder
             ("Recon Manager", "ATMRECON",   true, true,  true,  false),
             ("Recon Manager", "POSRECON",   true, true,  true,  false),
             ("Recon Manager", "BULKRECON",  true, true,  true,  false),
+            ("Recon Manager", "DAILYRECON", true, true,  true,  false),
             ("Recon Manager", "NETATMRECON", true, true,  true,  false),
             ("Recon Manager", "EXCEPTIONS", true, true,  true,  true),
             ("Recon Manager", "ANALYSIS",   true, false, false, false),

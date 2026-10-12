@@ -177,8 +177,8 @@
         _ => "bulk"
     };
 
-    private DateTime _from = new(2026, 3, 1);
-    private DateTime _to = new(2026, 3, 31);
+    private DateTime _from = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime _to = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1).AddDays(-1);
     private IBrowserFile? _trxFile, _glFile;
     private bool _running, _confirmNeeded, _navigationBlocked, _allowCompletionNavigation;
     private string? _error, _warning, _progress;
@@ -197,7 +197,9 @@
     private async Task Load()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        var query = db.ReconRuns.Where(r => r.Function == Function && r.Status == ReconRunStatus.Completed && !r.IsArchived);
+        // Date-range children of a daily/period month container are shown on the Daily recon screen,
+        // not here; a rolled-up month batch (ParentPeriodRunId == null) still appears as a normal batch.
+        var query = db.ReconRuns.Where(r => r.Function == Function && r.Status == ReconRunStatus.Completed && !r.IsArchived && r.ParentPeriodRunId == null);
         // Scheme-scoped screens show only their own runs; legacy screens show unscoped runs.
         query = SchemeProfileId is { } sp
             ? query.Where(r => r.SchemeProfileId == sp)
@@ -215,22 +217,10 @@
         if (_trxFile is null || _glFile is null) return;
         var from = DateOnly.FromDateTime(_from);
         var to = DateOnly.FromDateTime(_to);
+        var periodAdjusted = false;
         if (to < from) { _error = "Period 'to' must be on or after 'from'."; return; }
-        if (await BatchArchive.IsFrozenAsync(Function, from, to, SchemeProfileId)) { _error = "This reconciliation period is frozen. No further files can be uploaded or processed for it."; return; }
-
-        // Duplicate period warning (proceed on second click).
-        if (!_confirmNeeded)
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var dup = await db.ReconRuns.FirstOrDefaultAsync(r =>
-                r.Function == Function && r.PeriodStart == from && r.PeriodEnd == to && r.Status == ReconRunStatus.Completed);
-            if (dup is not null)
-            {
-                _warning = $"A {ShortName} reconciliation for {from:dd MMM} – {to:dd MMM yyyy} already exists (batch #{dup.ReconRunId}). Running again will create a new batch.";
-                _confirmNeeded = true;
-                return;
-            }
-        }
+        if (await BatchArchive.IsFrozenAsync(Function, from, to, SchemeProfileId))
+        { _error = "This reconciliation period is frozen. Select an open period before uploading files."; return; }
 
         _running = true;
         try
@@ -257,6 +247,31 @@
                 return;
             }
 
+            if (SourcePeriodSelection.Correction(trx.SourcePeriod, gl.SourcePeriod, from, to) is { } correction)
+            {
+                _warning = $"Period adjusted from {from:dd MMM yyyy} – {to:dd MMM yyyy} to {correction.From:dd MMM yyyy} – {correction.To:dd MMM yyyy}, using the dates inside both files.";
+                from = correction.From; to = correction.To;
+                _from = from.ToDateTime(TimeOnly.MinValue); _to = to.ToDateTime(TimeOnly.MinValue);
+                _confirmNeeded = false;
+                periodAdjusted = true;
+                StateHasChanged();
+            }
+            // Check workflow guards against the detected period, rather than an erroneous
+            // initial selection. Importing files never authorizes changing frozen results.
+            if (await BatchArchive.IsFrozenAsync(Function, from, to, SchemeProfileId))
+            { _error = $"The source period {from:dd MMM} – {to:dd MMM yyyy} is frozen. Reconciliation cannot change its results."; return; }
+            if (!_confirmNeeded)
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var dup = await db.ReconRuns.FirstOrDefaultAsync(r => r.Function == Function && r.SchemeProfileId == SchemeProfileId &&
+                    r.PeriodStart == from && r.PeriodEnd == to && r.Status == ReconRunStatus.Completed);
+                if (dup is not null)
+                {
+                    _warning = (_warning is null ? "" : _warning + " ") + $"A {ShortName} reconciliation for {from:dd MMM} – {to:dd MMM yyyy} already exists (batch #{dup.ReconRunId}). Running again will create a new batch.";
+                    _confirmNeeded = true; return;
+                }
+            }
+
             _progressStep = 3;
             _progress = "Matching records and calculating confidence…";
             _reconProcessed = _reconTotal = _reconMatched = 0;
@@ -272,7 +287,7 @@
             });
             var result = await Engine.RunAsync(Function, trx.ImportBatchId!.Value, gl.ImportBatchId!.Value, periodKey, from, to, default, liveProgress, PauseBeforeAmbiguousPassAsync, SchemeProfileId, _applyAmountTolerance, _configuredAmountTolerance);
             _allowCompletionNavigation = true;
-            Nav.NavigateTo($"/recon/run/{result.ReconRunId}");
+            Nav.NavigateTo($"/recon/run/{result.ReconRunId}" + (periodAdjusted ? "?sourcePeriodAdjusted=true" : ""));
         }
         catch (Exception ex)
         {

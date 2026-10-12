@@ -10,14 +10,14 @@ public class MatchWeights
     public const string SectionName = "MatchWeights";
 
     // Defaults: amount + date alone (45 + 33 = 78) clear the threshold. Reference/channel push confidence higher.
-    // Card and Time are reserved (0): the GL cardholder rows carry neither, so they cannot be scored yet.
+    // Card identity adds corroboration when supplied on both sides; scores are capped at 100.
     public decimal Amount { get; set; } = 45m;
     public decimal Date { get; set; } = 33m;
     public decimal Time { get; set; } = 0m;
     public decimal Reference { get; set; } = 17m;
     /// <summary>Minimum confidence when the processor and GL references are an exact identity match.</summary>
     public decimal ReferenceIdentityConfidence { get; set; } = 75m;
-    public decimal Card { get; set; } = 0m;
+    public decimal Card { get; set; } = 25m;
     public decimal Channel { get; set; } = 5m;
 
     /// <summary>Amounts within this absolute difference (account currency) count as equal.</summary>
@@ -30,4 +30,6 @@ public class MatchWeights
 
     /// <summary>Minimum confidence for an amount-based pair to be accepted as a match.</summary>
     public decimal MatchThreshold { get; set; } = 70m;
+    /// <summary>Minimum lead over the next candidate, required on both sides.</summary>
+    public decimal MinimumScoreGap { get; set; } = 5m;
 }

@@ -24,6 +24,11 @@ public class ReconException : IAuditable
     public decimal? ActualAmount { get; set; }
     public decimal? Difference { get; set; }
     public DateOnly? TxnDate { get; set; }
+    /// <summary>Link to the processor row this exception represents, so in-place passes can resolve exactly the right exception and preserve every other exception's analyst comments.</summary>
+    public int? ProcessorStagingId { get; set; }
+    public StagingSource? ProcessorSource { get; set; }
+    /// <summary>Link to the GL row for an unmatched-GL exception (same purpose as above).</summary>
+    public int? GlStagingId { get; set; }
     public string Narrative { get; set; } = string.Empty;
 
     public ExceptionStatus Status { get; set; } = ExceptionStatus.Open;
