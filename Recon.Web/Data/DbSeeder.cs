@@ -193,6 +193,7 @@ public static class DbSeeder
             ("DASHBOARD",  "Dashboard",        "/",            "OVERVIEW", 1, "dashboard"),
             ("RECON",      "Reconciliation",   null,           null,       2, null),
             ("SCHEMES",    "Schemes",          "/recon",       "RECON",    0, "bulk"),
+            ("ALLJOBS",    "All jobs",         "/recon/jobs",  "RECON",    8, "list"),
             ("ATMRECON",   "ATM recon",        "/recon/atm",   "RECON",    1, "atm"),
             ("POSRECON",   "POS recon",        "/recon/pos",   "RECON",    2, "pos"),
             ("BULKRECON",  "Bulk recon",       "/recon/bulk",  "RECON",    3, "bulk"),
@@ -263,6 +264,7 @@ public static class DbSeeder
         {
             ("Recon Officer", "DASHBOARD",  true, false, false, false),
             ("Recon Officer", "SCHEMES",    true, false, false, false),
+            ("Recon Officer", "ALLJOBS",    true, false, false, false),
             ("Recon Officer", "ATMRECON",   true, true,  false, false),
             ("Recon Officer", "POSRECON",   true, true,  false, false),
             ("Recon Officer", "BULKRECON",  true, true,  false, false),
@@ -275,6 +277,7 @@ public static class DbSeeder
 
             ("Recon Manager", "DASHBOARD",  true, false, false, false),
             ("Recon Manager", "SCHEMES",    true, false, false, false),
+            ("Recon Manager", "ALLJOBS",    true, false, false, false),
             ("Recon Manager", "ATMRECON",   true, true,  true,  false),
             ("Recon Manager", "POSRECON",   true, true,  true,  false),
             ("Recon Manager", "BULKRECON",  true, true,  true,  false),

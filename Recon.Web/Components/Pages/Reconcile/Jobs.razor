@@ -1,0 +1,186 @@
+@page "/recon/jobs"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.ICurrentUserService CurrentUser
+@inject Recon.Web.Services.IPermissionService Permissions
+@inject ILogger<Jobs> Logger
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+
+<PageTitle>All jobs · Recon Tool</PageTitle>
+<PageHeader Title="All jobs" Subtitle="Find and open reconciliation batches across all periods, including daily, archived and analysis runs" Eyebrow="Reconciliation" Icon="batches" />
+
+@if (!_ready)
+{
+    <p role="status" class="text-sm text-gray-500">Loading jobs…</p>
+}
+else if (!_allowed)
+{
+    <p role="alert" class="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">You do not have permission to view all jobs.</p>
+}
+else
+{
+    <form @onsubmit="ApplyFilters" @onsubmit:preventDefault class="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+        <div class="min-w-56 flex-1">
+            <label for="jobs-search" class="mb-1 block text-xs font-semibold text-gray-500">Batch ID, period or source filename</label>
+            <input id="jobs-search" @bind="_search" placeholder="e.g. 84 or 2023-04" class="@InputClass w-full" />
+        </div>
+        <div>
+            <label for="jobs-function" class="mb-1 block text-xs font-semibold text-gray-500">Function</label>
+            <select id="jobs-function" @bind="_function" class="@InputClass">
+                <option value="">All functions</option>
+                @foreach (var function in Enum.GetValues<ReconFunction>())
+                {
+                    <option value="@((int)function)">@FunctionLabel(function)</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="jobs-status" class="mb-1 block text-xs font-semibold text-gray-500">Status</label>
+            <select id="jobs-status" @bind="_status" class="@InputClass">
+                <option value="">All statuses</option>
+                @foreach (var status in Enum.GetValues<ReconRunStatus>())
+                {
+                    <option value="@((int)status)">@status</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="jobs-kind" class="mb-1 block text-xs font-semibold text-gray-500">Job type</label>
+            <select id="jobs-kind" @bind="_kind" class="@InputClass"><option value="">All types</option><option value="bulk">Standalone / month</option><option value="daily">Daily / date range</option><option value="analysis">Re-run analysis</option></select>
+        </div>
+        <div>
+            <label for="jobs-archive" class="mb-1 block text-xs font-semibold text-gray-500">Archive state</label>
+            <select id="jobs-archive" @bind="_archive" class="@InputClass"><option value="">Active and archived</option><option value="active">Active</option><option value="archived">Archived</option></select>
+        </div>
+        <button type="submit" disabled="@_loading" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Search</button>
+        <button type="button" @onclick="ResetFilters" disabled="@_loading" class="@InputClass">Reset</button>
+    </form>
+
+    @if (_error is not null)
+    {
+        <p role="alert" class="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-800">@_error</p>
+    }
+    <div class="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800" aria-busy="@_loading">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                    <tr><th class="px-4 py-3">Batch</th><th class="px-4 py-3">Function / scheme</th><th class="px-4 py-3">Period</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Matched</th><th class="px-4 py-3 text-right">Exceptions</th><th class="px-4 py-3">Created</th><th class="px-4 py-3">Approval</th></tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 text-gray-700 dark:divide-gray-700 dark:text-gray-200">
+                    @if (_jobs.Count == 0)
+                    {
+                        <tr><td colspan="9" class="px-4 py-10 text-center text-gray-500">@(_loading ? "Loading jobs…" : _error is not null ? "Jobs could not be loaded." : "No jobs match these filters.")</td></tr>
+                    }
+                    @foreach (var run in _jobs)
+                    {
+                        <tr @key="run.ReconRunId" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                            <td class="px-4 py-3"><a href="@($"/recon/run/{run.ReconRunId}")" aria-label="@($"Open batch {run.ReconRunId}")" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">#@run.ReconRunId</a></td>
+                            <td class="px-4 py-3">@FunctionLabel(run.Function)<span class="block text-xs text-gray-500">@(run.SchemeProfileId is int scheme ? _schemes.GetValueOrDefault(scheme, $"Scheme #{scheme}") : "Mastercard / legacy")</span></td>
+                            <td class="whitespace-nowrap px-4 py-3">@PeriodLabel(run)</td>
+                            <td class="px-4 py-3">@KindLabel(run)
+                                @if (run.AnalysisOfRunId is int original)
+                                {
+                                    <a href="@($"/recon/run/{original}")" class="block text-xs text-primary-700 hover:underline dark:text-primary-300">Original #@original</a>
+                                }
+                                @if (run.ParentPeriodRunId is int container)
+                                {
+                                    <a href="@($"/recon/daily/{container}")" class="block text-xs text-primary-700 hover:underline dark:text-primary-300">Month overview</a>
+                                }
+                            </td>
+                            <td class="px-4 py-3"><StatusBadge Text="@run.Status.ToString()" Color="@StatusColor(run.Status)" />
+                                @if (run.IsArchived) { <span class="mt-1 block text-xs text-gray-500">Archived</span> }
+                            </td>
+                            <td class="px-4 py-3 text-right tabular-nums">@run.MatchedCount.ToString("N0")</td>
+                            <td class="px-4 py-3 text-right tabular-nums">@run.ExceptionCount.ToString("N0")</td>
+                            <td class="whitespace-nowrap px-4 py-3 text-xs">@run.CreatedDate.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td>
+                            <td class="px-4 py-3 text-xs">@(run.AnalysisOfRunId.HasValue ? "Analysis only" : run.NextAction ?? (run.VerificationStatus == ReconVerificationStatus.Verified ? "Verified" : "Not submitted"))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
+            <span role="status">@(_total == 0 ? "0 jobs" : $"{_page * _pageSize + 1:N0}–{Math.Min((_page + 1) * _pageSize, _total):N0} of {_total:N0} jobs")</span>
+            <div class="flex flex-wrap items-center gap-3">
+                <label for="jobs-size">Rows per page</label>
+                <select id="jobs-size" @bind="_pageSize" @bind:after="ApplyFilters" disabled="@_loading" class="@InputClass"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select>
+                <button type="button" @onclick="FirstPage" disabled="@(_loading || _page == 0)" class="@InputClass disabled:opacity-40">First</button>
+                <button type="button" @onclick="PreviousPage" disabled="@(_loading || _page == 0)" class="@InputClass disabled:opacity-40">Previous</button>
+                <span>Page @(_page + 1) of @PageCount</span>
+                <button type="button" @onclick="NextPage" disabled="@(_loading || _page + 1 >= PageCount)" class="@InputClass disabled:opacity-40">Next</button>
+                <button type="button" @onclick="LastPage" disabled="@(_loading || _page + 1 >= PageCount)" class="@InputClass disabled:opacity-40">Last</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string InputClass = "rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100";
+    private bool _ready, _allowed, _loading;
+    private string _search = "", _function = "", _status = "", _kind = "", _archive = "";
+    private string? _error;
+    private int _page, _pageSize = 25, _total;
+    private int PageCount => Math.Max(1, (_total + _pageSize - 1) / _pageSize);
+    private List<ReconRun> _jobs = [];
+    private Dictionary<int, string> _schemes = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _allowed = await Permissions.CanViewAsync(CurrentUser.UserId, "ALLJOBS");
+        _ready = true;
+        if (_allowed) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!_allowed || _loading) return;
+        _loading = true;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var query = db.ReconRuns.AsNoTracking();
+            if (int.TryParse(_function, out var function)) query = query.Where(r => r.Function == (ReconFunction)function);
+            if (int.TryParse(_status, out var status)) query = query.Where(r => r.Status == (ReconRunStatus)status);
+            if (_archive == "active") query = query.Where(r => !r.IsArchived);
+            if (_archive == "archived") query = query.Where(r => r.IsArchived);
+            if (_kind == "analysis") query = query.Where(r => r.AnalysisOfRunId != null);
+            if (_kind == "daily") query = query.Where(r => r.AnalysisOfRunId == null && r.ParentPeriodRunId != null);
+            if (_kind == "bulk") query = query.Where(r => r.AnalysisOfRunId == null && r.ParentPeriodRunId == null);
+            var search = _search.Trim();
+            if (search.Length > 0)
+            {
+                var id = int.TryParse(search.TrimStart('#'), out var parsed) ? parsed : -1;
+                query = query.Where(r => r.ReconRunId == id || r.PeriodKey.Contains(search)
+                    || (r.ProcessorBatch != null && r.ProcessorBatch.FileName.Contains(search))
+                    || (r.GlBatch != null && r.GlBatch.FileName.Contains(search))
+                    || (r.NetworkBatch != null && r.NetworkBatch.FileName.Contains(search)));
+            }
+            _total = await query.CountAsync();
+            _page = Math.Clamp(_page, 0, PageCount - 1);
+            _jobs = await query.OrderByDescending(r => r.CreatedDate).ThenByDescending(r => r.ReconRunId)
+                .Skip(_page * _pageSize).Take(_pageSize).ToListAsync();
+            _schemes = await db.SchemeProfiles.AsNoTracking().ToDictionaryAsync(p => p.SchemeProfileId, p => p.Name);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unable to load reconciliation jobs");
+            _jobs = [];
+            _total = 0;
+            _page = 0;
+            _error = "Unable to load jobs. Select Search to retry.";
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task ApplyFilters() { _page = 0; await LoadAsync(); }
+    private async Task ResetFilters() { _search = _function = _status = _kind = _archive = ""; await ApplyFilters(); }
+    private async Task FirstPage() { _page = 0; await LoadAsync(); }
+    private async Task PreviousPage() { _page = Math.Max(0, _page - 1); await LoadAsync(); }
+    private async Task NextPage() { _page = Math.Min(PageCount - 1, _page + 1); await LoadAsync(); }
+    private async Task LastPage() { _page = PageCount - 1; await LoadAsync(); }
+    private static string KindLabel(ReconRun run) => run.AnalysisOfRunId.HasValue ? "Re-run analysis" : run.ParentPeriodRunId.HasValue ? "Daily / date range" : "Standalone / month";
+    private static string PeriodLabel(ReconRun run) => run.PeriodStart is { } from && run.PeriodEnd is { } to ? $"{from:dd MMM yyyy} – {to:dd MMM yyyy}" : run.PeriodKey;
+    private static string FunctionLabel(ReconFunction function) => function switch { ReconFunction.InterchangeToGl => "Bulk recon", ReconFunction.AtmToGl => "ATM recon", ReconFunction.PosToGl => "POS recon", ReconFunction.NetworkToAtm => "Network ↔ ATM", _ => function.ToString() };
+    private static string StatusColor(ReconRunStatus status) => status switch { ReconRunStatus.Completed => "green", ReconRunStatus.Failed => "red", ReconRunStatus.Running => "amber", _ => "gray" };
+}
