@@ -55,6 +55,129 @@ public class MatchingSafeguardTests : IAsyncLifetime
             _processorBatch, _glBatch, period, applyAmountTolerance: tolerance > 0, amountTolerance: tolerance);
 
     [Theory]
+    [InlineData(false, false)] [InlineData(false, true)]
+    [InlineData(true, false)] [InlineData(true, true)]
+    public async Task Credit_primary_uses_billing_less_ISS_and_preserves_source_amounts(bool normalized, bool reference)
+    {
+        await AddProcessor(amount: 103);
+        await AddGl(amount: 100);
+        await AddGl(amount: 103);
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var t = await db.StgInterchangeFees.SingleAsync();
+            t.ProductType = "CR";
+            t.IssMarkupAmount = 3;
+            t.MicrofilmRefNumber = reference ? "CREDITKEY" : null;
+            foreach (var g in await db.StgGlEntries.ToListAsync())
+            {
+                g.AcctNum = "9849077911";
+                g.TranParticular2 = reference ? "123456789012CREDITKEY" : null;
+            }
+            await db.SaveChangesAsync();
+            if (normalized)
+            {
+                await NormalizedProjection.ProjectBatchAsync(db, _processorBatch);
+                await NormalizedProjection.ProjectBatchAsync(db, _glBatch);
+            }
+        }
+        var result = await Run();
+        Assert.Equal(1, result.MatchedCount);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var match = await verify.ReconMatches.SingleAsync(m => m.ReconRunId == result.ReconRunId);
+        Assert.Equal(100m, match.GlAmount);
+        Assert.Equal(100m, match.ReconciliationAmount);
+        Assert.Equal(103m, match.BillingAmount);
+        Assert.Equal(3m, (await verify.StgInterchangeFees.SingleAsync()).IssMarkupAmount);
+        Assert.Contains("billing minus ISS markup", match.ScoreBreakdown);
+        Assert.Equal(ReconSettlementLeg.CreditIntermediary, match.SettlementLeg);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task Credit_reference_with_gross_billing_GL_is_an_amount_mismatch(bool normalized)
+    {
+        await AddProcessor(amount: 103);
+        await AddGl(amount: 103);
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var t = await db.StgInterchangeFees.SingleAsync();
+            t.ProductType = "CR"; t.IssMarkupAmount = 3; t.MicrofilmRefNumber = "KEY";
+            var g = await db.StgGlEntries.SingleAsync();
+            g.AcctNum = "9849077911"; g.TranParticular2 = "123456789012KEY";
+            await db.SaveChangesAsync();
+            if (normalized)
+            {
+                await NormalizedProjection.ProjectBatchAsync(db, _processorBatch);
+                await NormalizedProjection.ProjectBatchAsync(db, _glBatch);
+            }
+        }
+        var result = await Run();
+        Assert.Equal(0, result.MatchedCount);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var match = await verify.ReconMatches.SingleAsync(m => m.ReconRunId == result.ReconRunId);
+        Assert.Equal(MatchStatus.AmountMismatch, match.MatchStatus);
+        Assert.Equal(100m, match.ReconciliationAmount);
+    }
+
+    [Theory]
+    [InlineData(false, 2, 2)] [InlineData(true, 2, 2)]
+    [InlineData(false, 3, 2)] [InlineData(true, 2, 3)]
+    public async Task Withdrawal_matches_calendar_transaction_date_and_pairs_repeated_amounts(bool normalized, int processors, int glCount)
+    {
+        for (var i = 0; i < processors; i++) await AddProcessor(code: "04", reference: "TRX" + i);
+        for (var i = 0; i < glCount; i++) await AddGl(reference: "GL" + i);
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var rows = await db.StgInterchangeFees.ToListAsync();
+            foreach (var t in rows)
+            {
+                t.TransactionDate = Day.ToDateTime(new TimeOnly(18, 42, 35));
+                t.ProcessingDate = Day.AddDays(5);
+                t.TransactionWording = "ATM WITHDRAWAL";
+            }
+            foreach (var g in await db.StgGlEntries.ToListAsync())
+            {
+                g.TranParticular = "CASH/ATM";
+                g.TranDate = Day.AddDays(4);
+                g.EntryDate = Day.ToDateTime(TimeOnly.MinValue);
+            }
+            await db.SaveChangesAsync();
+            if (normalized)
+            {
+                await NormalizedProjection.ProjectBatchAsync(db, _processorBatch);
+                await NormalizedProjection.ProjectBatchAsync(db, _glBatch);
+            }
+        }
+        var result = await Run();
+        Assert.Equal(Math.Min(processors, glCount), result.MatchedCount);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var matched = await verify.ReconMatches.Where(m => m.ReconRunId == result.ReconRunId && m.MatchStatus == MatchStatus.Matched).ToListAsync();
+        Assert.Equal(matched.Count, matched.Select(m => m.GlStagingId).Distinct().Count());
+        Assert.All(matched, m => Assert.Contains("time ignored", m.ScoreBreakdown));
+        Assert.All(matched, m => Assert.Equal(18, m.ProcessorTransactionDateTime!.Value.Hour));
+    }
+
+    [Theory]
+    [InlineData("date")] [InlineData("amount")] [InlineData("currency")]
+    [InlineData("channel")] [InlineData("leg")]
+    public async Task Withdrawal_rule_requires_same_day_exact_amount_currency_leg_and_cash_GL(string mismatch)
+    {
+        await AddProcessor(code: "04", reference: "TRX");
+        await AddGl(reference: "OTHER");
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var g = await db.StgGlEntries.SingleAsync();
+            g.TranParticular = mismatch == "channel" ? "POS/TEST" : "CASH/ATM";
+            if (mismatch == "date") g.ValueDate = Day.AddDays(1);
+            if (mismatch == "amount") g.TranAmt = 100.01m;
+            if (mismatch == "currency") g.TranCcyCode = "USD";
+            if (mismatch == "leg") g.AcctNum = "9849077911";
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(0, (await Run()).MatchedCount);
+    }
+
+    [Theory]
     [InlineData(100.03, 0)] [InlineData(101.29, 2)]
     public async Task Nearby_amount_without_reference_is_included_in_candidate_search(decimal amount, decimal tolerance)
     {

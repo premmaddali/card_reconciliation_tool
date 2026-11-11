@@ -19,6 +19,7 @@ public class ReconVerificationService(IDbContextFactory<AppDbContext> dbFactory,
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var run = await db.ReconRuns.SingleOrDefaultAsync(r => r.ReconRunId == runId, ct)
             ?? throw new InvalidOperationException("Reconciliation batch was not found.");
+        if (run.AnalysisOfRunId is not null) throw new InvalidOperationException("Analysis results cannot be submitted for operational verification.");
         if (run.Status != ReconRunStatus.Completed) throw new InvalidOperationException("Only completed reconciliations can be submitted for verification.");
         if (run.VerificationStatus != ReconVerificationStatus.NotSubmitted) throw new InvalidOperationException("This reconciliation has already been submitted.");
 
@@ -62,6 +63,7 @@ public class ReconVerificationService(IDbContextFactory<AppDbContext> dbFactory,
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var run = await db.ReconRuns.SingleOrDefaultAsync(r => r.ReconRunId == runId, ct)
             ?? throw new InvalidOperationException("Reconciliation batch was not found.");
+        if (run.AnalysisOfRunId is not null) throw new InvalidOperationException("Analysis results cannot be operationally verified.");
         if (run.VerificationStatus != ReconVerificationStatus.AwaitingVerification || run.CurrentWorkflowStepId is null)
             throw new InvalidOperationException("This reconciliation is not awaiting verification.");
 

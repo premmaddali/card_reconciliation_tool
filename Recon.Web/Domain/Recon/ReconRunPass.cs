@@ -11,7 +11,9 @@ public enum ReconPassKind : byte
     /// <summary>Card-number + date + amount + currency matching, applied in place.</summary>
     CardNumber = 2,
     /// <summary>Uses this batch's data to reconcile adjacent (previous/next) batches' leftovers.</summary>
-    CrossPeriod = 3
+    CrossPeriod = 3,
+    /// <summary>The initial engine phases when replaying stored source data.</summary>
+    InitialAnalysis = 4
 }
 
 /// <summary>

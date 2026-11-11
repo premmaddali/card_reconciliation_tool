@@ -40,6 +40,7 @@ builder.Services.AddSingleton<IAdapterRegistry>(sp => new AdapterRegistry(
 builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IReconEngine, ReconEngine>();
 builder.Services.AddScoped<SecondaryMatchService>();
+builder.Services.AddScoped<ReconAnalysisService>();
 builder.Services.AddScoped<DailyReconService>();
 builder.Services.AddScoped<MatchingReviewService>();
 builder.Services.AddHttpClient<LocalAiReviewService>(client =>

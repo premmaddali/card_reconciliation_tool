@@ -170,6 +170,69 @@ public class SecondaryMatchServiceTests : IAsyncLifetime
         Assert.True(await db.ReconRunPasses.AnyAsync(p => p.ReconRunId == 1 && p.Kind == ReconPassKind.SecondaryAmount));
     }
     [Theory]
+    [InlineData("secondary")] [InlineData("adjacent")] [InlineData("card")]
+    public async Task Credit_refinement_uses_billing_less_ISS(string pass)
+    {
+        await AddProcessor(amount: 103);
+        var glId = pass == "adjacent" ? await AddAdjacentGl("2023-04") : await AddGl();
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var t = await db.StgInterchangeFees.SingleAsync();
+            t.ProductType = "CR"; t.IssMarkupAmount = 3; t.MicrofilmRefNumber = "KEY";
+            t.CardAccountEntityId = "4111111111111111";
+            (await db.ReconMatches.SingleAsync()).SettlementLeg = ReconSettlementLeg.CreditIntermediary;
+            var g = await db.StgGlEntries.SingleAsync(g => g.StgGlEntryId == glId);
+            g.AcctNum = "9849077911"; g.TranParticular2 = "123456789012KEY";
+            g.TranRmks = CardIdentity.ImportRemarks("4111111111111111");
+            await db.SaveChangesAsync();
+        }
+        var review = await new MatchingReviewService(Factory, _auth, new PermissionService(Factory)).AnalyzeAsync(1);
+        if (pass != "adjacent")
+        {
+            Assert.Equal(1, review.UniqueDateWindowCandidates);
+            Assert.Equal(100m, Assert.Single(review.DateWindowCandidates).Amount);
+        }
+        var result = pass switch
+        {
+            "adjacent" => await Service.RunAdjacentAsync(1),
+            "card" => await Service.RunCardAsync(1),
+            _ => await Service.RunAsync(1)
+        };
+        Assert.Equal(1, result.Added);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var match = await verify.ReconMatches.SingleAsync();
+        Assert.Equal(100m, match.ReconciliationAmount);
+        Assert.Equal(100m, match.GlAmount);
+        Assert.Equal(103m, match.BillingAmount);
+        Assert.Contains("billing minus ISS markup", match.ScoreBreakdown);
+    }
+
+    [Theory]
+    [InlineData(2, 1)] [InlineData(1, 2)] [InlineData(2, 2)]
+    public async Task Withdrawal_secondary_pass_pairs_same_day_amounts_once(int processors, int gls)
+    {
+        for (var i = 0; i < processors; i++) await AddProcessor();
+        for (var i = 0; i < gls; i++) await AddGl();
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            foreach (var t in await db.StgInterchangeFees.ToListAsync()) t.TransactionCode = "04";
+            foreach (var g in await db.StgGlEntries.ToListAsync())
+            {
+                g.TranParticular = "CASH/ATM";
+                g.TranParticular2 = "DIFFERENT";
+            }
+            await db.SaveChangesAsync();
+        }
+        var result = await Service.RunAsync(1);
+        Assert.Equal(Math.Min(processors, gls), result.Added);
+        Assert.Equal(result, await Service.RunAsync(1));
+        await using var verify = await Factory.CreateDbContextAsync();
+        var matched = await verify.ReconMatches.Where(m => m.MatchStatus == MatchStatus.Matched).ToListAsync();
+        Assert.Equal(matched.Count, matched.Select(m => m.GlStagingId).Distinct().Count());
+        Assert.All(matched, m => Assert.Contains("time ignored", m.ScoreBreakdown));
+    }
+
+    [Theory]
     [InlineData(2, 1)] [InlineData(1, 2)] [InlineData(2, 2)]
     public async Task Repeated_composite_keys_remain_ambiguous(int processors, int gls)
     {
@@ -296,10 +359,12 @@ public class SecondaryMatchServiceTests : IAsyncLifetime
         Assert.Equal(results.Count(x=>x.GlStagingId!=null),results.Where(x=>x.GlStagingId!=null).Select(x=>x.GlStagingId).Distinct().Count());
         var added=results.Where(x=>x.MatchStatus==MatchStatus.Matched && x.ScoreBreakdown?.StartsWith(SecondaryMatchService.MethodLabel)==true).ToList();
         Assert.Equal(secondary.Added,added.Count);
+        var stagedTransactions = await db.StgInterchangeFees.ToDictionaryAsync(t => t.StgInterchangeFeeId);
         Assert.All(added,x=>{
             Assert.Equal(DateOnly.FromDateTime(x.ProcessorTransactionDateTime!.Value),x.GlValueDate);
             Assert.Equal(x.BillingCcy,x.GlCcy);
-            Assert.Equal(Math.Abs(x.BillingAmount!.Value),x.GlAmount);
+            var t = stagedTransactions[x.ProcessorStagingId];
+            Assert.Equal(MatchingEvidence.BillingAmountForMatching(t.ProductType, t.BillingAmount, t.IssMarkupAmount), x.GlAmount);
         });
         Assert.Equal(primary.MatchedCount+secondary.Added,results.Count(x=>x.MatchStatus==MatchStatus.Matched));
     }

@@ -26,6 +26,7 @@ public class ReconRunConfiguration : IEntityTypeConfiguration<ReconRun>
     public void Configure(EntityTypeBuilder<ReconRun> b)
     {
         b.HasKey(x => x.ReconRunId);
+        b.HasOne<ReconRun>().WithMany().HasForeignKey(x => x.AnalysisOfRunId).OnDelete(DeleteBehavior.NoAction);
         b.HasIndex(x => x.SecondaryOfRunId).IsUnique().HasFilter("[SecondaryOfRunId] IS NOT NULL");
         b.HasIndex(x => x.CardOfRunId).IsUnique().HasFilter("[CardOfRunId] IS NOT NULL");
         b.Property(x => x.Function).HasConversion<byte>();

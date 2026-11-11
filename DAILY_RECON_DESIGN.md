@@ -206,8 +206,9 @@ the month batch (eligible only for the spread-unbounded Orphan run).
 - **Rollup** creates the month batch as `ParentPeriodRunId == null`, `PeriodGranularity = Month`, so it
   is a first-class month batch (shown on the Bulk screen, eligible for the future Orphan run).
   Children are archived, not deleted, so their change-table history (`ReconRunPass`) survives. The
-  consolidated run's `ProcessorBatchId`/`GlBatchId` are nominal (first child's); its staging tabs in
-  RunDetail show only that batch, but the Reconciliation tab (matches/exceptions/summaries) is complete.
+  consolidated run's `ProcessorBatchId`/`GlBatchId` are nominal (first child's). As of 2026-10-20,
+  RunDetail resolves all archived child imports for the source-data tabs and Re-run analysis;
+  its Reconciliation tab continues to show the consolidated matches/exceptions/summaries.
 - **Aged (display)** = unmatched exceptions whose date ≤ month-end − spread (settlement window closed
   within the month). Computed for display, not persisted.
 

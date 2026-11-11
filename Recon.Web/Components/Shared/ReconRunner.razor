@@ -199,7 +199,7 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         // Date-range children of a daily/period month container are shown on the Daily recon screen,
         // not here; a rolled-up month batch (ParentPeriodRunId == null) still appears as a normal batch.
-        var query = db.ReconRuns.Where(r => r.Function == Function && r.Status == ReconRunStatus.Completed && !r.IsArchived && r.ParentPeriodRunId == null);
+        var query = db.ReconRuns.Where(r => r.AnalysisOfRunId == null && r.Function == Function && r.Status == ReconRunStatus.Completed && !r.IsArchived && r.ParentPeriodRunId == null);
         // Scheme-scoped screens show only their own runs; legacy screens show unscoped runs.
         query = SchemeProfileId is { } sp
             ? query.Where(r => r.SchemeProfileId == sp)

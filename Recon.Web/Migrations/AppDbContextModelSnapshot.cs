@@ -694,6 +694,9 @@ namespace Recon.Web.Migrations
                     b.Property<decimal?>("AmountTolerance")
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<int?>("AnalysisOfRunId")
+                        .HasColumnType("int");
+
                     b.Property<bool>("ApplyAmountTolerance")
                         .HasColumnType("bit");
 
@@ -800,6 +803,8 @@ namespace Recon.Web.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("ReconRunId");
+
+                    b.HasIndex("AnalysisOfRunId");
 
                     b.HasIndex("CardOfRunId")
                         .IsUnique()
@@ -2467,6 +2472,11 @@ namespace Recon.Web.Migrations
 
             modelBuilder.Entity("Recon.Web.Domain.Import.ReconRun", b =>
                 {
+                    b.HasOne("Recon.Web.Domain.Import.ReconRun", null)
+                        .WithMany()
+                        .HasForeignKey("AnalysisOfRunId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.HasOne("Recon.Web.Domain.Import.ImportBatch", "GlBatch")
                         .WithMany()
                         .HasForeignKey("GlBatchId")

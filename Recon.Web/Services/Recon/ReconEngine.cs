@@ -17,7 +17,8 @@ public interface IReconEngine
     Task<ReconRunResult> RunAsync(ReconFunction function, int processorBatchId, int glBatchId,
         string periodKey, DateOnly? periodStart = null, DateOnly? periodEnd = null, CancellationToken ct = default,
         IProgress<ReconProgress>? progress = null, Func<ReconProgress, Task>? beforeAmbiguousPass = null, int? schemeProfileId = null,
-        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true);
+        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true,
+        ReconAnalysisInputs? analysis = null);
 }
 
 /// <summary>
@@ -57,6 +58,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         public int Ccy;
         public decimal Amount;      // abs TranAmt
         public DateOnly? Date;
+        public DateOnly? ValueDate;
         public DateTime? PostingDateTime;
         public string? Reference;   // adapter-defined standard match key
         public string? CreditReference; // Mastercard credit key: TranParticular2 after its twelve-character posting prefix
@@ -100,7 +102,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
     public async Task<ReconRunResult> RunAsync(ReconFunction function, int processorBatchId, int glBatchId,
         string periodKey, DateOnly? periodStart = null, DateOnly? periodEnd = null, CancellationToken ct = default,
         IProgress<ReconProgress>? progress = null, Func<ReconProgress, Task>? beforeAmbiguousPass = null, int? schemeProfileId = null,
-        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true)
+        bool applyAmountTolerance = false, decimal amountTolerance = 0m, bool enforcePostingPeriod = true,
+        ReconAnalysisInputs? analysis = null)
     {
         if (function == ReconFunction.AtmToGl)
             throw new InvalidOperationException("ATM-to-GL reconciliation is not available: Mastercard currently has no ATM General Ledger. Use Network ↔ ATM reconciliation instead.");
@@ -117,6 +120,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             Status = ReconRunStatus.Running,
             ProcessorBatchId = processorBatchId, GlBatchId = glBatchId, StartedDate = DateTime.UtcNow,
             SchemeProfileId = schemeProfileId,
+            AnalysisOfRunId = analysis?.SourceRunId,
+            PeriodGranularity = analysis?.Granularity ?? PeriodGranularity.Month,
             ApplyAmountTolerance = applyAmountTolerance && amountTolerance > _w.AmountTolerance,
             AmountTolerance = applyAmountTolerance && amountTolerance > _w.AmountTolerance ? amountTolerance : null
         };
@@ -127,14 +132,22 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         {
             await using var assignmentTransaction = await db.Database.BeginTransactionAsync(ct);
             await GlAssignmentLock.AcquireAsync(db, ct);
-            var gl = await LoadGlAsync(db, glBatchId, function, ct);
-            if (!await db.NormalizedGlEntries.AnyAsync(x => x.ImportBatchId == glBatchId, ct))
+            var gl = analysis is null ? await LoadGlAsync(db, glBatchId, function, ct) : new List<GlRow>();
+            if (analysis is not null)
+                foreach (var batch in analysis.GlBatchIds)
+                    gl.AddRange(await LoadGlLegacyAsync(db, batch, function, ct));
+            if (analysis is not null || !await db.NormalizedGlEntries.AnyAsync(x => x.ImportBatchId == glBatchId, ct))
             {
-                var reserved = (await db.ReconMatches.Where(x => x.MatchedAcrossPeriods && x.GlStagingId != null && x.ReconRun.ProcessorBatchId != processorBatchId)
+                var originalId = analysis?.SourceRunId;
+                var reserved = (await db.ReconMatches.Where(x => x.ReconRun.AnalysisOfRunId == null && x.ReconRunId != originalId
+                    && x.MatchedAcrossPeriods && x.GlStagingId != null && x.ReconRun.ProcessorBatchId != processorBatchId)
                     .Select(x => x.GlStagingId!.Value).ToListAsync(ct)).ToHashSet();
                 gl.RemoveAll(x => reserved.Contains(x.Id));
             }
-            var proc = await LoadProcessorAsync(db, processorBatchId, function, ct);
+            var proc = analysis is null ? await LoadProcessorAsync(db, processorBatchId, function, ct) : new List<ProcRow>();
+            if (analysis is not null)
+                foreach (var batch in analysis.ProcessorBatchIds)
+                    proc.AddRange(await LoadProcessorLegacyAsync(db, batch, function, ct));
             progress?.Report(new("Preparing match candidates…", 0, proc.Count, 0));
 
             var effectiveAmountTolerance = run.AmountTolerance ?? _w.AmountTolerance;
@@ -201,7 +214,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         var nativeCurrencies = await db.StgGlEntries.Where(g => g.ImportBatchId == glBatchId)
             .Select(g => new { g.StgGlEntryId, g.TranCcyCode }).ToDictionaryAsync(g => g.StgGlEntryId, g => g.TranCcyCode, ct);
         var nativeCards = await db.StgGlEntries.Where(g => g.ImportBatchId == glBatchId)
-            .Select(g => new { g.StgGlEntryId, g.TranRmks, g.TranParticular }).ToDictionaryAsync(g => g.StgGlEntryId, g => g, ct);
+            .Select(g => new { g.StgGlEntryId, g.TranRmks, g.TranParticular, g.ValueDate }).ToDictionaryAsync(g => g.StgGlEntryId, g => g, ct);
 
         var rows = new List<GlRow>(raw.Count);
         foreach (var g in raw)
@@ -219,6 +232,8 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 Leg = (ReconSettlementLeg)g.SettlementLeg,
                 Amount = g.Amount,
                 Date = g.PostingDate,
+                ValueDate = g.SourceTable == nameof(StgGlEntry) && g.SourceStagingId is int valueId && nativeCards.TryGetValue(valueId, out var valueRow)
+                    ? valueRow.ValueDate : null,
                 PostingDateTime = g.PostingDateTime,
                 Reference = g.Reference,
                 CreditReference = MastercardCreditGlKey(g.Reference),
@@ -242,7 +257,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var raw = await db.StgGlEntries
             .Where(g => g.ImportBatchId == glBatchId && g.AcctNum != null && accts.Keys.Contains(g.AcctNum))
-            .Select(g => new { g.StgGlEntryId, g.AcctNum, g.TranAmt, g.TranCcyCode, g.TranDate, g.EntryDate, g.VfdDate, g.TranParticular, g.TranParticular2, g.TranRmks })
+            .Select(g => new { g.StgGlEntryId, g.AcctNum, g.TranAmt, g.TranCcyCode, g.TranDate, g.ValueDate, g.EntryDate, g.VfdDate, g.TranParticular, g.TranParticular2, g.TranRmks })
             .ToListAsync(ct);
 
         var rows = new List<GlRow>(raw.Count);
@@ -264,6 +279,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 Leg = accts[g.AcctNum!],
                 Amount = Math.Abs(g.TranAmt ?? 0m),
                 Date = g.TranDate,
+                ValueDate = g.ValueDate,
                 PostingDateTime = g.EntryDate ?? g.VfdDate,
                 Reference = g.TranParticular2?.Trim(),
                 CreditReference = MastercardCreditGlKey(g.TranParticular2),
@@ -307,8 +323,9 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             : [];
 
         var result = new List<ProcRow>(rows.Count);
-        var nativeCards = await db.StgInterchangeFees.Where(t => t.ImportBatchId == batchId)
-            .Select(t => new { t.StgInterchangeFeeId, t.CardAccountEntityId }).ToDictionaryAsync(t => t.StgInterchangeFeeId, t => t.CardAccountEntityId, ct);
+        var nativeTransactions = await db.StgInterchangeFees.Where(t => t.ImportBatchId == batchId)
+            .Select(t => new { t.StgInterchangeFeeId, t.CardAccountEntityId, t.ProductType, t.BillingAmount, t.BillingCcy, t.IssMarkupAmount })
+            .ToDictionaryAsync(t => t.StgInterchangeFeeId, ct);
         foreach (var x in rows)
         {
             if (x.SourceStagingId is int stagingId && onUsAtmStagingIds.Contains(stagingId)) continue;
@@ -318,7 +335,13 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
             // FX fallback chain: settlement → billing → transaction (adapter already normalized amounts).
             int? ccy = null; decimal amount = 0m; string? fxBasis = null;
-            if (x.Processor == "BankOne")
+            if (x.SourceStagingId is int nativeId && nativeTransactions.TryGetValue(nativeId, out var native) && MatchingEvidence.IsCredit(native.ProductType))
+                (ccy, amount, fxBasis) = MatchingEvidence.BillingValue(x.Currency, x.Amount, x.SettlementCurrency, x.SettlementAmount,
+                    native.BillingCcy, native.BillingAmount, native.ProductType, native.IssMarkupAmount);
+            else if (MatchingEvidence.IsCredit(x.CardType))
+                (ccy, amount, fxBasis) = MatchingEvidence.BillingValue(x.Currency, x.Amount, x.SettlementCurrency, x.SettlementAmount,
+                    x.BillingCurrency, x.BillingAmount, x.CardType);
+            else if (x.Processor == "BankOne")
                 (ccy, amount, fxBasis) = MatchingEvidence.BillingValue(x.Currency, x.Amount, x.SettlementCurrency, x.SettlementAmount, x.BillingCurrency, x.BillingAmount);
             else if (x.SettlementCurrency is int sc && settlementCurrencies.Contains(sc))
                 (ccy, amount, fxBasis) = (sc, Math.Abs(x.SettlementAmount ?? 0m), "settlement");
@@ -331,7 +354,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             {
                 Id = checked((int)x.NormalizedTransactionId),
                 AccountNumber = x.MaskedCardNumber,
-                CardNumber = x.Processor == "BankOne" && x.SourceStagingId is int cardId && nativeCards.TryGetValue(cardId, out var cardToken) ? cardToken : null,
+                CardNumber = x.Processor == "BankOne" && x.SourceStagingId is int cardId && nativeTransactions.TryGetValue(cardId, out var cardRow) ? cardRow.CardAccountEntityId : null,
                 Source = StagingSource.InterchangeFee, // provenance kept via NormalizedTransactionId + batch
                 Leg = (ReconSettlementLeg)x.SettlementLeg,
                 OriginalCcy = x.Currency,
@@ -406,20 +429,21 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
 
         var ir = await db.StgInterchangeFees
             .Where(x => x.ImportBatchId == batchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0"))
-            .Select(x => new { x.StgInterchangeFeeId, x.CardAccountNumber, x.CardNumberHashed, x.CardAccountEntityId, x.ProductType, x.MerchantAcronym, x.TxnCcy, x.TxnAmount, x.BillingCcy, x.BillingAmount, x.SettlementCcy, x.SettlementAmount, x.ProcessingDate, x.TransactionDate, x.ReferenceNumber, x.MicrofilmRefNumber, x.TransactionCode, x.TransactionWording })
+            .Select(x => new { x.StgInterchangeFeeId, x.CardAccountNumber, x.CardNumberHashed, x.CardAccountEntityId, x.ProductType, x.MerchantAcronym, x.TxnCcy, x.TxnAmount, x.BillingCcy, x.BillingAmount, x.IssMarkupAmount, x.SettlementCcy, x.SettlementAmount, x.ProcessingDate, x.TransactionDate, x.ReferenceNumber, x.MicrofilmRefNumber, x.TransactionCode, x.TransactionWording })
             .ToListAsync(ct);
         return ir.Select(x =>
         {
             var w = (x.TransactionWording ?? "").ToUpperInvariant();
             var cash = w.Contains("WITHDRAWAL") || w.Contains("CASH");
-            var recon = ReconciliationValue(x.TxnCcy, x.TxnAmount, x.SettlementCcy, x.SettlementAmount, x.BillingCcy, x.BillingAmount, settlementCurrencies);
+            (int? Ccy, decimal Amount, string? FxBasis) recon = MatchingEvidence.BillingValue(x.TxnCcy, x.TxnAmount, x.SettlementCcy, x.SettlementAmount,
+                x.BillingCcy, x.BillingAmount, x.ProductType, x.IssMarkupAmount);
             return new ProcRow
             {
                 Id = x.StgInterchangeFeeId,
                 AccountNumber = x.CardAccountNumber ?? x.CardNumberHashed,
                 CardNumber = x.CardAccountEntityId,
                 Source = StagingSource.InterchangeFee,
-                Leg = string.Equals(x.ProductType, "CR", StringComparison.OrdinalIgnoreCase) ? ReconSettlementLeg.CreditIntermediary : ReconSettlementLeg.DebitCardholder,
+                Leg = MatchingEvidence.IsCredit(x.ProductType) ? ReconSettlementLeg.CreditIntermediary : ReconSettlementLeg.DebitCardholder,
                 OriginalCcy = x.TxnCcy,
                 OriginalAmount = Math.Abs(x.TxnAmount ?? 0m),
                 BillingAmount = x.BillingAmount is null ? null : Math.Abs(x.BillingAmount.Value),
@@ -437,7 +461,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 Reference = x.ReferenceNumber?.Trim(),
                 MicrofilmReference = x.MicrofilmRefNumber?.Trim(),
                 // Credit-card GL matching uses MICROFILM REF NUMBER, never REFERENCE NUMBER.
-                MatchKey = string.Equals(x.ProductType, "CR", StringComparison.OrdinalIgnoreCase)
+                MatchKey = MatchingEvidence.IsCredit(x.ProductType)
                     ? x.MicrofilmRefNumber?.Trim()
                     : x.ReferenceNumber?.Trim(),
                 TransactionCode = x.TransactionCode?.Trim(),
@@ -513,6 +537,7 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
                 GlAmount = g.Amount,
                 GlCcy = g.Ccy,
                 GlDate = g.Date,
+                GlValueDate = g.ValueDate,
                 GlPostingDateTime = g.PostingDateTime,
                 Ccy = p.Ccy
             });
@@ -558,11 +583,30 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             ct.ThrowIfCancellationRequested();
         }
 
+        // Withdrawal settlement uses the transaction's calendar date, rather than its processing
+        // date. Equal amounts on that day are interchangeable, but each GL is consumed once.
+        if (fn == ReconFunction.InterchangeToGl)
+        {
+            var cashGl = gl.Where(g => !g.Used && g.IsCash && g.ValueDate.HasValue && g.Ccy > 0)
+                .GroupBy(g => (g.Leg, g.Ccy, Date: g.ValueDate!.Value, g.Amount))
+                .ToDictionary(g => g.Key, g => new Queue<GlRow>(g.OrderBy(x => x.Id)));
+            foreach (var p in proc.Where(p => !matchedProc.Contains(p.Id) &&
+                AtmWithdrawalMatching.IsWithdrawal(p.TransactionCode, p.Description)))
+            {
+                if (p.TransactionDateTime is not { } timestamp || p.Ccy is not > 0) continue;
+                var key = (p.Leg, p.Ccy.Value, DateOnly.FromDateTime(timestamp), p.Amount);
+                if (!cashGl.TryGetValue(key, out var candidates) || !candidates.TryDequeue(out var g)) continue;
+                g.Used = true;
+                matchedProc.Add(p.Id);
+                RecordAssignment(p, g, 78m, AtmWithdrawalMatching.Evidence, true, false);
+            }
+        }
+
         // Scored pass: only unresolved rows enter candidate generation.  This is where duplicate,
         // ambiguous and reference-less records are evaluated.
         var procChoices = new Dictionary<int, CandidateChoices>();
         var glChoices = new Dictionary<int, CandidateChoices>();
-        var evaluated = uniqueResolved;
+        var evaluated = matchedProc.Count;
         foreach (var p in proc)
         {
             if (matchedProc.Contains(p.Id)) continue;
@@ -592,15 +636,15 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             evaluated++;
             if (evaluated % 500 == 0 || evaluated == proc.Count)
             {
-                progress?.Report(new("Evaluating transaction records…", evaluated, proc.Count, 0));
+                progress?.Report(new("Evaluating transaction records…", evaluated, proc.Count, matchedCount));
                 ct.ThrowIfCancellationRequested();
                 await Task.Yield();
             }
         }
 
-        // A pair is assignable only when it is the clear best choice on BOTH sides.
+        // Remaining scored pairs require a clear best choice on BOTH sides.
         // Do not resolve a tie by source order or by eliminating competing rows first.
-        var assigned = uniqueResolved;
+        var assigned = matchedProc.Count;
         foreach (var p in proc.Where(p => !matchedProc.Contains(p.Id)))
         {
             if (!procChoices.TryGetValue(p.Id, out var choices)) continue;

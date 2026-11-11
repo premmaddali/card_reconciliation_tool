@@ -176,7 +176,7 @@
     {
         if (RunId.HasValue) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        var runs = await db.ReconRuns.AsNoTracking().Where(r => r.Status == ReconRunStatus.Completed && !r.IsArchived)
+        var runs = await db.ReconRuns.AsNoTracking().Where(r => r.AnalysisOfRunId == null && r.Status == ReconRunStatus.Completed && !r.IsArchived)
             .OrderByDescending(r => r.CreatedDate).Take(100).ToListAsync();
         _batches = runs.Select(r => new BatchChoice
         {

@@ -46,6 +46,8 @@ public enum PeriodGranularity : byte
 public class ReconRun : IAuditable
 {
     public int ReconRunId { get; set; }
+    /// <summary>Read-only replay of an existing run. Analysis results never reserve operational GL.</summary>
+    public int? AnalysisOfRunId { get; set; }
     public bool IsAdjacentPeriodRun { get; set; }
     public int? SecondaryOfRunId { get; set; }
     /// <summary>Source run for a separately auditable card-identity pass.</summary>

@@ -1,5 +1,62 @@
 # ReconTool — Reconciliation Engine Spec (MasterCard)
 
+## Re-run analysis from stored imports (2026-10-20)
+
+The Bulk/Daily run-detail action **Re-run analysis (all stages)** reads the already
+staged TRX and GL, creates a new `ReconRun` linked by `AnalysisOfRunId`, then runs the
+current primary engine, Date/Amount/Currency, Card Number, and Previous/Next Period
+passes in that order. Existing pass flags belong to the original run and do not
+suppress the new run's stages. Original matches, comments, verification and freeze
+state are preserved, including when the original is archived or already verified.
+Historical import date labels are not revalidated as new uploads; the original
+source associations and displayed reconciliation range are retained.
+
+Each stage is recorded in `ReconRunPass`; missing card identities, missing GL value
+dates, or unavailable adjacent GL are explicitly marked **Skipped** with a reason.
+Unexpected failures mark the analysis failed and leave the original untouched.
+All analysis copies use native staging IDs, so already-projected BankOne imports
+can also use the secondary passes without re-uploading their files.
+
+Daily date-range replays keep their original range, and consolidated-month replays
+read all the original child imports. Analysis results do not join the operational
+daily pool, orphan sweep, active batch lists, dashboards or exception overview and
+never reserve GL for operational runs. They cannot be submitted, frozen, archived
+as an operational batch, or used to create manual GL. Access requires an active
+user with Bulk view and add/edit permission. Stored source rows must still exist.
+
+The additive `StoredSourceReanalysis` migration adds the nullable self-reference on
+`ReconRuns`. The run detail lists recent analyses with links back to the original.
+
+## Credit-card net billing amount (2026-10-20)
+
+For product type `CR`, the GL comparison amount is `BILLING AMOUNT - ISS MARKUP AMOUNT`
+in billing currency. Subtraction uses the signed source values, then the existing GL
+matcher compares magnitudes. A blank ISS markup is zero; missing billing leaves the
+credit transaction unmatched rather than substituting transaction/settlement amount.
+Debit products keep their existing calculation.
+
+The same calculation applies to Bulk/Daily primary matching, secondary/card/adjacent
+passes, Daily cross-run matching, the long-outstanding sweep, and review candidates.
+Normalized BankOne batches read the original staging billing/ISS values, including
+already-imported batches. Source amounts remain intact and `ReconciliationAmount`
+stores the net amount; matching evidence records the amount basis. Stored historical
+matches are not automatically recalculated.
+
+## ATM withdrawal date/amount rule (2026-10-19)
+
+Bulk primary matching (including the primary pass of Daily runs), Bulk date/amount
+secondary passes and Daily cross-run matching pair outstanding ATM withdrawals using
+the calendar portion of the TRX transaction timestamp against GL `VALUE_DATE`.
+The TRX processing date and time of day do not participate in this rule; the original
+timestamp remains available for audit.
+
+Withdrawals are identified by transaction code `04` or wording containing `WITHDRAWAL`,
+and must match a `CASH` GL entry with the exact reconciliation amount, currency and
+settlement leg. Repeated same-day amounts may pair in any order, consuming each GL
+entry once. References and card identities are not required by this withdrawal rule.
+Unique-reference matching still runs first. Other transactions retain the normal
+ambiguity checks, and the unbounded orphan sweep retains its reference requirement.
+
 ## Complementary card evidence (2026-10-07)
 
 ### Separate card-number pass (2026-10-12)

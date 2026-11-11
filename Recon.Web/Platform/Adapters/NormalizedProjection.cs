@@ -152,7 +152,7 @@ public static class NormalizedProjection
                 Processor = "BankOne",
                 IsCash = cash,
                 IsPos = !cash,
-                SettlementLeg = (byte)(string.Equals(x.ProductType, "CR", StringComparison.OrdinalIgnoreCase)
+                SettlementLeg = (byte)(MatchingEvidence.IsCredit(x.ProductType)
                     ? ReconSettlementLeg.CreditIntermediary : ReconSettlementLeg.DebitCardholder),
             });
         }

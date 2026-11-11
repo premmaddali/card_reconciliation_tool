@@ -27,9 +27,10 @@ public sealed class BatchArchiveService(IDbContextFactory<AppDbContext> dbFactor
         await EnsureCanEditAsync("FREEZE_PERIOD");
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var selected = await db.ReconRuns.SingleOrDefaultAsync(r => r.ReconRunId == runId, ct) ?? throw new InvalidOperationException("Reconciliation batch was not found.");
+        if (selected.AnalysisOfRunId is not null) throw new InvalidOperationException("Analysis results cannot freeze an operational period.");
         if (selected.Status != ReconRunStatus.Completed) throw new InvalidOperationException("Only completed reconciliation batches can be frozen.");
         if (await db.BatchFreezes.AnyAsync(f => f.Function == selected.Function && f.PeriodKey == selected.PeriodKey && f.SchemeProfileId == selected.SchemeProfileId, ct)) throw new InvalidOperationException("This reconciliation period is already frozen.");
-        var ids = await db.ReconRuns.Where(r => !r.IsArchived && r.Status == ReconRunStatus.Completed && r.Function == selected.Function && r.PeriodKey == selected.PeriodKey && r.SchemeProfileId == selected.SchemeProfileId).Select(r => r.ReconRunId).ToListAsync(ct);
+        var ids = await db.ReconRuns.Where(r => r.AnalysisOfRunId == null && !r.IsArchived && r.Status == ReconRunStatus.Completed && r.Function == selected.Function && r.PeriodKey == selected.PeriodKey && r.SchemeProfileId == selected.SchemeProfileId).Select(r => r.ReconRunId).ToListAsync(ct);
         foreach (var id in ids) await ArchiveRunAsync(db, id, true, ct);
         db.BatchFreezes.Add(new BatchFreeze { Function = selected.Function, PeriodKey = selected.PeriodKey, PeriodStart = selected.PeriodStart, PeriodEnd = selected.PeriodEnd, SchemeProfileId = selected.SchemeProfileId, FrozenFromReconRunId = runId, FrozenDate = DateTime.UtcNow, FrozenBy = currentUser.UserId });
         await db.SaveChangesAsync(ct);
@@ -44,6 +45,7 @@ public sealed class BatchArchiveService(IDbContextFactory<AppDbContext> dbFactor
     private async Task ArchiveRunAsync(AppDbContext db, int runId, bool frozen, CancellationToken ct)
     {
         var run = await db.ReconRuns.SingleOrDefaultAsync(r => r.ReconRunId == runId, ct) ?? throw new InvalidOperationException("Reconciliation batch was not found."); if (run.IsArchived) return;
+        if (run.AnalysisOfRunId is not null) throw new InvalidOperationException("Analysis results are separate from operational batch archives.");
         var matches = await db.ReconMatches.Where(m => m.ReconRunId == runId).ToListAsync(ct); var exceptions = await db.ReconExceptions.Include(e => e.Comments).Where(e => e.ReconRunId == runId).ToListAsync(ct);
         db.BatchArchives.Add(new BatchArchive { OriginalReconRunId = runId, Function = run.Function, PeriodKey = run.PeriodKey, PeriodStart = run.PeriodStart, PeriodEnd = run.PeriodEnd, SchemeProfileId = run.SchemeProfileId, ArchivedByFreeze = frozen, ArchivedDate = DateTime.UtcNow, ArchivedBy = currentUser.UserId, SnapshotJson = JsonSerializer.Serialize(new { Run = run, Matches = matches, Exceptions = exceptions }, JsonOptions), Transactions = matches.Select(m => new BatchArchiveTransaction { ReferenceNumber = m.ReferenceNumber, MatchStatus = m.MatchStatus, ReconciliationAmount = m.ReconciliationAmount, GlAmount = m.GlAmount, SnapshotJson = JsonSerializer.Serialize(m, JsonOptions) }).ToList() }); run.IsArchived = true;
     }

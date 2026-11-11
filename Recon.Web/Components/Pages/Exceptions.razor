@@ -51,8 +51,8 @@
     protected override async Task OnInitializedAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        var runs = await db.ReconRuns.OrderByDescending(r => r.CreatedDate).Take(50).ToListAsync();
-        var agg = await db.ReconExceptions
+        var runs = await db.ReconRuns.Where(r => r.AnalysisOfRunId == null).OrderByDescending(r => r.CreatedDate).Take(50).ToListAsync();
+        var agg = await db.ReconExceptions.Where(e => e.ReconRun.AnalysisOfRunId == null)
             .GroupBy(e => new { e.ReconRunId, e.Status })
             .Select(g => new { g.Key.ReconRunId, g.Key.Status, Count = g.Count() })
             .ToListAsync();

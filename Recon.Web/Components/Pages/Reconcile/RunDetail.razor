@@ -2,6 +2,7 @@
 @inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
 @inject NavigationManager Nav
 @inject Recon.Web.Services.Recon.SecondaryMatchService SecondaryMatching
+@inject Recon.Web.Services.Recon.ReconAnalysisService Analysis
 @inject ILogger<RunDetail> SecondaryLogger
 @inject Recon.Web.Services.Recon.IExceptionWorkflowService Workflow
 @inject Recon.Web.Services.Recon.IReconVerificationService Verification
@@ -50,7 +51,7 @@ else
 
     <div class="verification-panel mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
         <div class="flex items-center gap-3"><span class="verification-panel-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"><CheckCircleIcon Class="h-5 w-5" /></span><div><p class="verification-panel-eyebrow text-xs font-semibold uppercase tracking-wide">Verification workflow</p><p class="verification-panel-text mt-1 text-sm font-semibold">@VerificationText()</p>@if (!string.IsNullOrWhiteSpace(_run.ResponsibleActor)) { <p class="verification-panel-subtext mt-0.5 text-xs">Responsible role(s): @_run.ResponsibleActor</p> }</div></div>
-        @if (_run.VerificationStatus == ReconVerificationStatus.NotSubmitted)
+        @if (_run.AnalysisOfRunId == null && _run.VerificationStatus == ReconVerificationStatus.NotSubmitted)
         {
             <button type="button" @onclick="SubmitForVerification" disabled="@_submitting" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Submit for verification</button>
         }
@@ -60,16 +61,41 @@ else
         }
     </div>
     @if (_verificationError is not null) { <p class="-mt-3 mb-4 text-sm text-red-600">@_verificationError</p> }
+    @if (_run.AnalysisOfRunId is int originalRunId)
+    {
+        <div class="mb-4 rounded-xl border border-primary-200 bg-primary-50 p-4 text-sm dark:border-primary-800 dark:bg-primary-950/30">
+            <p class="font-semibold">Analysis of <a class="text-primary-700 underline dark:text-primary-300" href="@($"/recon/run/{originalRunId}")">batch #@originalRunId</a></p>
+            <p class="mt-1">These are separate test results. The original matches, review history and approvals are unchanged.</p>
+        </div>
+    }
+    @if (_canSecondaryMatch && _run.Function == ReconFunction.InterchangeToGl)
+    {
+        <div class="mb-5 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+            <button type="button" @onclick="RerunAnalysis" disabled="@(_secondaryBusy || _submitting || _archiving || _run.Status != ReconRunStatus.Completed)"
+                    class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Re-run analysis (all stages)</button>
+            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Uses stored TRX and GL rows. Runs initial matching, Date/Amount/Currency, Card Number and Previous/Next Period into new analysis results. No upload required.</p>
+            @if (_analyses.Count > 0)
+            {
+                <ul class="mt-3 space-y-1 text-sm">
+                    @foreach (var replay in _analyses)
+                    {
+                        <li @key="replay.ReconRunId"><a class="font-semibold text-primary-700 underline dark:text-primary-300" href="@($"/recon/run/{replay.ReconRunId}")">Analysis #@replay.ReconRunId</a> · @replay.Status · @replay.MatchedCount.ToString("N0") matched · @replay.ExceptionCount.ToString("N0") exceptions · @replay.StartedDate?.ToLocalTime().ToString("dd MMM yyyy HH:mm")</li>
+                    }
+                </ul>
+            }
+        </div>
+    }
     @if (_passes.Count > 0)
     {
         <div class="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-900 dark:bg-emerald-950/30">
-            <p class="font-semibold text-emerald-900 dark:text-emerald-200">Refinements applied to this batch</p>
+            <p class="font-semibold text-emerald-900 dark:text-emerald-200">@(_run.AnalysisOfRunId is null ? "Refinements applied to this batch" : "Analysis stages")</p>
             <ul class="mt-2 space-y-1">
                 @foreach (var p in _passes)
                 {
                     <li @key="p.ReconRunPassId" class="flex items-center gap-2">
                         <CheckCircleIcon Class="h-4 w-4 shrink-0 text-emerald-600" />
-                        <span>@PassName(p.Kind): <span class="font-semibold">@p.Added</span> additional match@(p.Added == 1 ? "" : "es")@(p.Ambiguous > 0 ? $", {p.Ambiguous} to review" : "") — @p.RunAt.ToLocalTime().ToString("dd MMM HH:mm")</span>
+                        <span>@PassName(p.Kind): <span class="font-semibold">@p.Added</span> match@(p.Added == 1 ? "" : "es")@(p.Ambiguous > 0 ? $", {p.Ambiguous} to review" : "") — @p.RunAt.ToLocalTime().ToString("dd MMM HH:mm")</span>
+                        @if (_run.AnalysisOfRunId is not null) { <span class="text-xs text-gray-600 dark:text-gray-300">@p.Detail</span> }
                     </li>
                 }
             </ul>
@@ -83,7 +109,7 @@ else
     {
         <p role="status" class="mb-4 text-sm text-red-600">@_secondaryError</p>
     }
-    @if (_canSecondaryMatch && _run.Function == ReconFunction.InterchangeToGl)
+    @if (_canSecondaryMatch && _run.Function == ReconFunction.InterchangeToGl && _run.AnalysisOfRunId is null)
     {
         var busy = _secondaryBusy || _submitting || _archiving || _run.Status != ReconRunStatus.Completed || _run.IsArchived || _run.VerificationStatus != ReconVerificationStatus.NotSubmitted;
         <div class="mb-5 flex flex-wrap items-center gap-3 text-sm">
@@ -660,10 +686,14 @@ else
     private string? _secondaryProgress;
     private string? _secondaryResult;
     private List<ReconRunPass> _passes = new();
+    private List<ReconRun> _analyses = new();
+    private int[] _sourceProcessorBatchIds = [];
+    private int[] _sourceGlBatchIds = [];
     private bool PassDone(ReconPassKind k) => _passes.Any(p => p.Kind == k);
     private int PassAdded(ReconPassKind k) => _passes.Where(p => p.Kind == k).Sum(p => p.Added);
     private static string PassName(ReconPassKind k) => k switch
     {
+        ReconPassKind.InitialAnalysis => "Initial matching",
         ReconPassKind.SecondaryAmount => "Date/Amount/Cur",
         ReconPassKind.CardNumber => "Card number",
         _ => "Previous/Next period"
@@ -672,6 +702,34 @@ else
     private Task RunSecondaryMatching() => RunMatching(false);
     private Task RunAdjacentMatching() => RunMatching(true);
     private Task RunCardMatching() => RunMatching(false, card: true);
+
+    private async Task RerunAnalysis()
+    {
+        if (_secondaryBusy) return;
+        _secondaryBusy = true; _secondaryError = null; _secondaryResult = null;
+        _secondaryProgress = "Preparing stored source data…";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var progress = new Progress<Recon.Web.Services.Recon.ReconProgress>(p =>
+            {
+                _secondaryProgress = p.Total > 0 ? $"{p.Stage} {p.Processed:N0} / {p.Total:N0} records · {p.Matched:N0} matched" : p.Stage;
+                _ = InvokeAsync(StateHasChanged);
+            });
+            var result = await Analysis.RunAsync(RunId, progress);
+            _tab = Tab.Reconciliation;
+            _matchPage = 0;
+            Nav.NavigateTo($"/recon/run/{result.RunId}");
+        }
+        catch (Exception ex)
+        {
+            SecondaryLogger.LogError(ex, "Re-analysis failed for batch {RunId}", RunId);
+            _secondaryError = ex is InvalidOperationException or UnauthorizedAccessException ? ex.Message
+                : "Analysis failed. The original batch is unchanged. Check the logs before retrying.";
+            await OnParametersSetAsync();
+        }
+        finally { _secondaryBusy = false; _secondaryProgress = null; }
+    }
 
     private async Task RunMatching(bool adjacent, bool card = false)
     {
@@ -724,7 +782,7 @@ else
     private (string Label, bool Right)[] InterchangeTrxHeaders => new[]
     {
         ("Source row", true), ("Microfilm reference", false), ("Microfilm sequence", true), ("Reference", false),
-        ("Card", false), ("Product code", false), ("Product type", false), ("Client code", false), ("Card account", false),
+        ("Card", false), ("CARD_ACCOUNT_ENTITY_ID", false), ("Product code", false), ("Product type", false), ("Client code", false), ("Card account", false),
         ("Transaction date/time", false), ("Processing date", false), ("Transaction code", false), ("Transaction wording", false),
         ("Transaction amount", true), ("Transaction currency", false), ("Billing amount", true), ("Billing currency", false),
         ("Settlement amount", true), ("Settlement currency", false), ("Interchange fee raw", false), ("Interchange fee", true),
@@ -733,10 +791,10 @@ else
     };
     private (string Label, bool Right)[] GlHeaders => new[]
     {
-        ("Source row", true), ("SOL ID", false), ("Account number", false), ("GL sub-head code", false), ("GL account", false),
+        ("Source row", true), ("SOL ID", false), ("Account number", false), ("TRAN_RMKS (card matching)", false), ("GL sub-head code", false), ("GL account", false),
         ("Account name", false), ("Transaction date", false), ("Transaction ID", false), ("Reference number", false),
         ("Particular", false), ("Particular 2", false), ("Particular code", false), ("Debit", true), ("Credit", true),
-        ("Remarks", false), ("Transaction amount", true), ("Transaction currency", false), ("Entry user", false),
+        ("Transaction amount", true), ("Transaction currency", false), ("Entry user", false),
         ("Verified user", false), ("Entry date/time", false), ("Verification date/time", false), ("Rate", true),
         ("Part transaction serial", true), ("MUR amount", true)
     };
@@ -762,7 +820,7 @@ else
     };
     private static readonly HashSet<string> DataFilterColumns = new(StringComparer.Ordinal)
     {
-        "Source row", "Merchant", "Processing code", "Reference", "Card", "Raw card", "Card account", "Product code", "Product type", "Client code",
+        "Source row", "Merchant", "Processing code", "Reference", "Card", "Raw card", "Card account", "CARD_ACCOUNT_ENTITY_ID", "TRAN_RMKS (card matching)", "Product code", "Product type", "Client code",
         "Transaction code", "Transaction wording", "Transaction date", "Transaction date/time", "Processing date", "Transaction currency",
         "SOL ID", "Account number", "GL sub-head code", "GL account", "Account name", "Transaction ID", "Reference number",
         "Particular", "Particular 2", "Particular code", "Transaction currency", "Entry user", "Verified user",
@@ -806,6 +864,17 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         _run = await db.ReconRuns.FirstOrDefaultAsync(r => r.ReconRunId == RunId);
         if (_run is null) return;
+        _sourceProcessorBatchIds = [_run.ProcessorBatchId];
+        _sourceGlBatchIds = _run.GlBatchId is int glId ? [glId] : [];
+        if (_run.Function == ReconFunction.InterchangeToGl && _run.GlBatchId != null)
+        {
+            var inputs = await Recon.Web.Services.Recon.ReconAnalysisInputs.LoadAsync(db, _run, default);
+            _sourceProcessorBatchIds = inputs.ProcessorBatchIds;
+            _sourceGlBatchIds = inputs.GlBatchIds;
+        }
+        _analyses = await db.ReconRuns.Where(r => r.AnalysisOfRunId == (_run.AnalysisOfRunId ?? RunId))
+            .OrderByDescending(r => r.ReconRunId).Take(10).ToListAsync();
+        if (_run.AnalysisOfRunId is not null) _canArchive = _canFreeze = _canManualGlMatch = false;
         _passes = await db.ReconRunPasses.Where(p => p.ReconRunId == RunId).OrderBy(p => p.RunAt).ToListAsync();
         var userRoleIds = await db.UserAppAccesses.Where(x => x.UserId == CurrentUser.UserId && x.IsActive).Select(x => x.AppAccessId).ToListAsync();
         _canVerify = _run.VerificationStatus == ReconVerificationStatus.AwaitingVerification && _run.CurrentWorkflowStepId is not null
@@ -826,7 +895,7 @@ else
         _debitAccounts = accountMap.Where(a => a.Role == GlAccountRole.CardholderSettlement).Select(a => a.AcctNum).ToList();
 
         _transactionCurrencies = _run.Function == ReconFunction.InterchangeToGl
-            ? await db.StgInterchangeFees.Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.TxnCcy != null)
+            ? await db.StgInterchangeFees.Where(x => _sourceProcessorBatchIds.Contains(x.ImportBatchId) && x.TxnCcy != null)
                 .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync()
             : await db.StgDebitSettlements.Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.TxnCcy != null)
                 .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync();
@@ -912,10 +981,10 @@ else
         ApplyTransactionFilters(db.StgDebitSettlements.Where(x => x.ImportBatchId == _run!.ProcessorBatchId));
 
     private IQueryable<StgInterchangeFee> InterchangeQuery(Recon.Web.Data.AppDbContext db) =>
-        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => x.ImportBatchId == _run!.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0")));
+        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => _sourceProcessorBatchIds.Contains(x.ImportBatchId) && (x.OrigineCode == null || x.OrigineCode.Trim() != "0")));
 
     private IQueryable<StgInterchangeFee> OnUsAtmQuery(Recon.Web.Data.AppDbContext db) =>
-        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => x.ImportBatchId == _run!.ProcessorBatchId && x.OrigineCode != null && x.OrigineCode.Trim() == "0"));
+        ApplyTransactionFilters(db.StgInterchangeFees.Where(x => _sourceProcessorBatchIds.Contains(x.ImportBatchId) && x.OrigineCode != null && x.OrigineCode.Trim() == "0"));
 
     private IQueryable<StgDebitSettlement> ApplyTransactionFilters(IQueryable<StgDebitSettlement> q)
     {
@@ -943,6 +1012,7 @@ else
         if (int.TryParse(DataFilterValue("Source row"), out var sourceRow)) q = q.Where(x => x.SourceRowNumber == sourceRow);
         q = ApplyTextFilter(q, "Reference", x => x.ReferenceNumber);
         q = ApplyTextFilter(q, "Card", x => x.CardNumberHashed);
+        q = ApplyTextFilter(q, "CARD_ACCOUNT_ENTITY_ID", x => x.CardAccountEntityId);
         q = ApplyTextFilter(q, "Card account", x => x.CardAccountNumber);
         q = ApplyTextFilter(q, "Product code", x => x.ProductCode);
         if (DataFilterValue("Product type") == "__blank__") q = q.Where(x => x.ProductType == null || x.ProductType == "");
@@ -964,8 +1034,9 @@ else
 
     private IQueryable<StgGlEntry> GlQuery(Recon.Web.Data.AppDbContext db)
     {
-        var q = db.StgGlEntries.Where(x => x.ImportBatchId == _run!.GlBatchId && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
-        q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
+        var q = db.StgGlEntries.Where(x => _sourceGlBatchIds.Contains(x.ImportBatchId) && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
+        if (_run!.Function != ReconFunction.InterchangeToGl)
+            q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
         if (int.TryParse(DataFilterValue("Source row"), out var sourceRow)) q = q.Where(x => x.SourceRowNumber == sourceRow);
         q = ApplyTextFilter(q, "SOL ID", x => x.SolId);
         q = ApplyTextFilter(q, "Account number", x => x.AcctNum);
@@ -978,6 +1049,7 @@ else
         q = ApplyTextFilter(q, "Particular", x => x.TranParticular);
         q = ApplyTextFilter(q, "Particular 2", x => x.TranParticular2);
         q = ApplyTextFilter(q, "Particular code", x => x.TranParticularCode);
+        q = ApplyTextFilter(q, "TRAN_RMKS (card matching)", x => x.TranRmks);
         q = ApplyTextFilter(q, "Transaction currency", x => x.TranCcyCode);
         q = ApplyTextFilter(q, "Entry user", x => x.EntryUserId);
         q = ApplyTextFilter(q, "Verified user", x => x.VfdUserId);
@@ -992,8 +1064,9 @@ else
 
     private IQueryable<StgGlBulkPosting> GlBulkQuery(Recon.Web.Data.AppDbContext db)
     {
-        var q = db.StgGlBulkPostings.Where(x => x.ImportBatchId == _run!.GlBatchId && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
-        q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
+        var q = db.StgGlBulkPostings.Where(x => _sourceGlBatchIds.Contains(x.ImportBatchId) && x.AcctNum != null && _cardholderAccts.Contains(x.AcctNum));
+        if (_run!.Function != ReconFunction.InterchangeToGl)
+            q = q.Where(x => x.AcctNum != null && _debitAccounts.Contains(x.AcctNum));
         if (int.TryParse(DataFilterValue("Source row"), out var sourceRow)) q = q.Where(x => x.SourceRowNumber == sourceRow);
         q = ApplyTextFilter(q, "Account", x => x.AcctNum);
         var referenceMode = DataFilterMode("Reference");
@@ -1049,6 +1122,7 @@ else
                     new(x.MicrofilmRefSeq?.ToString("N0") ?? "", Right: true),
                     new(x.ReferenceNumber ?? "", Mono: true),
                     new(x.CardNumberHashed ?? "", Mono: true),
+                    new(x.CardAccountEntityId ?? "", Mono: true),
                     new(x.ProductCode ?? ""),
                     new(x.ProductType ?? ""),
                     new(x.ClientCode ?? ""),
@@ -1068,7 +1142,6 @@ else
                     new(CcyName(x.IntFeesCcy)),
                     new(x.OrigineCode ?? ""),
                     new(x.TerminalId ?? "", Mono: true),
-                    new(x.TransactionWording ?? ""),
                     new(x.MerchantAcronym ?? ""),
                     new(x.IssMarkupAmount?.ToString("N2") ?? "", Right: true),
                     new(x.ConversionFees?.ToString("N2") ?? "", Right: true),
@@ -1117,6 +1190,7 @@ else
                 new(x.SourceRowNumber.ToString("N0"), Right: true),
                 new(x.SolId ?? ""),
                 new(x.AcctNum ?? "", Mono: true),
+                new(x.TranRmks ?? "", Mono: true),
                 new(x.GlSubHeadCode ?? ""),
                 new(x.GlAccount ?? ""),
                 new(x.AcctName ?? ""),
@@ -1128,7 +1202,6 @@ else
                 new(x.TranParticularCode ?? ""),
                 new(x.Debit?.ToString("N2") ?? "", Right: true),
                 new(x.Credit?.ToString("N2") ?? "", Right: true),
-                new(x.TranRmks ?? ""),
                 new(x.TranAmt?.ToString("N2") ?? "", Right: true),
                 new(x.TranCcyCode ?? ""),
                 new(x.EntryUserId ?? ""),
@@ -1540,7 +1613,7 @@ else
     };
     // A reviewer can accept any non-matched row that has a linked GL entry. Amounts may be
     // missing for some source records; the manual decision and its reason are still valid.
-    private static bool CanManuallyMatch(ReconMatch match) => match.MatchStatus != MatchStatus.Matched && match.GlStagingId is not null;
+    private bool CanManuallyMatch(ReconMatch match) => _run is { AnalysisOfRunId: null } && match.MatchStatus != MatchStatus.Matched && match.GlStagingId is not null;
     private bool CanAddManualGl(ReconMatch match) => _canManualGlMatch && match.MatchStatus == MatchStatus.UnmatchedProcessor && match.GlStagingId is null;
     private bool AllPageEligibleSelected
     {
@@ -1580,6 +1653,7 @@ else
 
     private async Task SaveManualGlMatch()
     {
+        if (_run?.AnalysisOfRunId is not null) { _manualGlError = "Analysis results cannot create operational GL entries."; return; }
         var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
         if (!grants.TryGetValue("MANUAL_GL_MATCH", out var grant) || !grant.CanEdit)
         {
@@ -1670,6 +1744,7 @@ else
 
     private async Task SaveManualMatches()
     {
+        if (_run?.AnalysisOfRunId is not null) { _manualMatchError = "Analysis results are read-only."; return; }
         if (string.IsNullOrWhiteSpace(_manualMatchComment)) { _manualMatchError = "Enter a reason before marking records as matched."; return; }
         await using var db = await DbFactory.CreateDbContextAsync();
         var matches = await db.ReconMatches.Where(m => m.ReconRunId == RunId && _selectedMatchIds.Contains(m.ReconMatchId) && m.MatchStatus != MatchStatus.Matched && m.GlStagingId != null).ToListAsync();

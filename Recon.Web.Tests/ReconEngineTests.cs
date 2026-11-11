@@ -127,7 +127,8 @@ public class ReconEngineTests(ITestOutputHelper output) : IAsyncLifetime
         {
             ImportBatchId = processorBatch.ImportBatchId, ProductType = "CR", ReferenceNumber = "OLDREF000001",
             MicrofilmRefNumber = "123456789012", TransactionCode = "09", TransactionDate = date.ToDateTime(TimeOnly.MinValue),
-            ProcessingDate = date, TxnCcy = 480, TxnAmount = 100m
+            ProcessingDate = date, TxnCcy = 480, TxnAmount = 100m,
+            BillingCcy = 480, BillingAmount = 103m, IssMarkupAmount = 3m
         });
         db.StgGlEntries.Add(new StgGlEntry
         {

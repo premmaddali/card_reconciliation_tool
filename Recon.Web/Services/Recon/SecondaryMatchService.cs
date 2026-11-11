@@ -42,21 +42,24 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
         // Serialize clicks for the same source run and hold its inputs stable until commit.
         var source = await db.ReconRuns.FromSqlInterpolated($"SELECT * FROM [ReconRuns] WITH (UPDLOCK, HOLDLOCK) WHERE [ReconRunId] = {originalRunId}").SingleOrDefaultAsync(ct)
             ?? throw new InvalidOperationException("The reconciliation run was not found.");
+        var isAnalysis = source.AnalysisOfRunId is not null;
+        var analysis = isAnalysis ? await ReconAnalysisInputs.LoadAsync(db, source, ct) : null;
         var sourcePeriod = await db.ImportBatches.Where(x => x.ImportBatchId == source.ProcessorBatchId).Select(x => x.PeriodKey).SingleAsync(ct);
-        if (!string.IsNullOrWhiteSpace(sourcePeriod) && source.PeriodKey != sourcePeriod)
+        if (!isAnalysis && !string.IsNullOrWhiteSpace(sourcePeriod) && source.PeriodKey != sourcePeriod)
             throw new InvalidOperationException($"Run period {source.PeriodKey} disagrees with processor batch period {sourcePeriod}. Create a new reconciliation using the source period before running additional passes.");
         if (source.Function != ReconFunction.InterchangeToGl || source.GlBatchId is null)
             throw new InvalidOperationException("Start the secondary pass from a Bulk reconciliation run.");
-        if (source.Status != ReconRunStatus.Completed || source.IsArchived || source.VerificationStatus != ReconVerificationStatus.NotSubmitted ||
-            await db.BatchFreezes.AnyAsync(x => x.Function == source.Function && x.PeriodKey == source.PeriodKey && x.SchemeProfileId == source.SchemeProfileId, ct))
+        if ((source.Status != ReconRunStatus.Completed && !(isAnalysis && source.Status == ReconRunStatus.Running))
+            || source.IsArchived || source.VerificationStatus != ReconVerificationStatus.NotSubmitted ||
+            (!isAnalysis && await db.BatchFreezes.AnyAsync(x => x.Function == source.Function && x.PeriodKey == source.PeriodKey && x.SchemeProfileId == source.SchemeProfileId, ct)))
             throw new InvalidOperationException("Secondary matching requires a completed, unsubmitted run in an unfrozen period.");
         // Each refinement is an independent in-place method, applied once and recorded; re-running a
         // processed pass is a no-op. No ordering dependency between the three methods.
         var kind = card ? ReconPassKind.CardNumber : adjacent ? ReconPassKind.CrossPeriod : ReconPassKind.SecondaryAmount;
         var priorPasses = await db.ReconRunPasses.Where(p => p.ReconRunId == originalRunId && p.Kind == kind).ToListAsync(ct);
         if (priorPasses.Count > 0) return new(originalRunId, priorPasses.Sum(x => x.Added), priorPasses.Sum(x => x.Ambiguous));
-        if (await db.NormalizedTransactions.AnyAsync(x => x.ImportBatchId == source.ProcessorBatchId, ct) ||
-            await db.NormalizedGlEntries.AnyAsync(x => x.ImportBatchId == source.GlBatchId, ct))
+        if (!isAnalysis && (await db.NormalizedTransactions.AnyAsync(x => x.ImportBatchId == source.ProcessorBatchId, ct) ||
+            await db.NormalizedGlEntries.AnyAsync(x => x.ImportBatchId == source.GlBatchId, ct)))
             throw new InvalidOperationException("This secondary pass requires the imported interchange and GL source rows.");
 
         // Read-only candidate set (only the still-unmatched rows the pass could change). Loading the
@@ -69,12 +72,13 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
             .ToListAsync(ct);
         var usedGl = (await db.ReconMatches.Where(x => x.ReconRunId == originalRunId && x.GlStagingId != null)
             .Select(x => x.GlStagingId!.Value).ToListAsync(ct)).ToHashSet();
-        var transactions = await db.StgInterchangeFees.AsNoTracking().Where(x => x.ImportBatchId == source.ProcessorBatchId).ToDictionaryAsync(x => x.StgInterchangeFeeId, ct);
+        var processorBatchIds = analysis?.ProcessorBatchIds ?? [source.ProcessorBatchId];
+        var transactions = await db.StgInterchangeFees.AsNoTracking().Where(x => processorBatchIds.Contains(x.ImportBatchId)).ToDictionaryAsync(x => x.StgInterchangeFeeId, ct);
         var methodLabel = card ? CardMethodLabel : MethodLabel;
         if (card && !transactions.Values.Any(t => t.CardAccountEntityId is not null))
             throw new InvalidOperationException("No TMS card identities are available. Import the new extract with CARD_ACCOUNT_ENTITY_ID as text and create a new reconciliation first.");
         var accounts = await db.GlSettlementAccounts.Where(x => x.IsActive).ToDictionaryAsync(x => x.AcctNum, x => x.Role, ct);
-        var batchIds = new List<int> { source.GlBatchId.Value };
+        var batchIds = (analysis?.GlBatchIds ?? [source.GlBatchId.Value]).ToList();
         var sourcePeriods = new Dictionary<int, string>();
         if (adjacent)
         {
@@ -84,22 +88,24 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
                 System.Globalization.DateTimeStyles.None, out var month))
                 throw new InvalidOperationException("Adjacent matching requires a single YYYY-MM reconciliation period.");
             var periods = new[] { month.AddMonths(-1).ToString("yyyy-MM"), month.AddMonths(1).ToString("yyyy-MM") };
-            var frozen = await db.BatchFreezes.Where(x => x.Function == source.Function && x.SchemeProfileId == source.SchemeProfileId).Select(x => x.PeriodKey).ToListAsync(ct);
+            var frozen = isAnalysis ? [] : await db.BatchFreezes.Where(x => x.Function == source.Function && x.SchemeProfileId == source.SchemeProfileId).Select(x => x.PeriodKey).ToListAsync(ct);
             var batches = await db.ImportBatches.Where(x => x.SourceType == SourceType.GlDump && x.Status == ImportStatus.Parsed &&
                 x.SchemeProfileId == source.SchemeProfileId && periods.Contains(x.PeriodKey) && !frozen.Contains(x.PeriodKey)).ToListAsync(ct);
             if (batches.Count == 0) throw new InvalidOperationException($"Import GL files for {string.Join(" or ", periods)} in the same scheme first. Frozen periods are excluded.");
             batchIds = batches.Select(x => x.ImportBatchId).ToList();
             sourcePeriods = batches.ToDictionary(x => x.ImportBatchId, x => x.PeriodKey);
-            if (await db.NormalizedGlEntries.AnyAsync(x => batchIds.Contains(x.ImportBatchId), ct))
+            if (!isAnalysis && await db.NormalizedGlEntries.AnyAsync(x => batchIds.Contains(x.ImportBatchId), ct))
                 throw new InvalidOperationException("Adjacent matching requires native imported GL source rows.");
-            var assigned = await db.ReconMatches.Where(x => x.GlStagingId != null && x.ReconRun.Function != ReconFunction.NetworkToAtm &&
+            var assigned = await db.ReconMatches.Where(x => x.ReconRun.AnalysisOfRunId == null && x.ReconRunId != source.AnalysisOfRunId
+                    && x.GlStagingId != null && x.ReconRun.Function != ReconFunction.NetworkToAtm &&
                     db.StgGlEntries.Any(g => g.StgGlEntryId == x.GlStagingId && batchIds.Contains(g.ImportBatchId)))
                 .Select(x => x.GlStagingId!.Value).Distinct().ToListAsync(ct);
             usedGl.UnionWith(assigned);
         }
         else
         {
-            var reserved = await db.ReconMatches.Where(x => x.MatchedAcrossPeriods && x.GlStagingId != null && x.ReconRun.ProcessorBatchId != source.ProcessorBatchId)
+            var reserved = await db.ReconMatches.Where(x => x.ReconRun.AnalysisOfRunId == null && x.ReconRunId != source.AnalysisOfRunId
+                && x.MatchedAcrossPeriods && x.GlStagingId != null && x.ReconRun.ProcessorBatchId != source.ProcessorBatchId)
                 .Select(x => x.GlStagingId!.Value).ToListAsync(ct);
             usedGl.UnionWith(reserved);
         }
@@ -117,7 +123,9 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
                 !transactions.TryGetValue(match.ProcessorStagingId, out var t) || t.OrigineCode?.Trim() == "0" ||
                 t.TransactionDate is null || t.BillingAmount is null || t.BillingCcy is null || t.BillingCcy <= 0) return null;
             if (card && t.CardAccountEntityId is null) return null;
-            return new(match.SettlementLeg, DateOnly.FromDateTime(t.TransactionDate.Value), Math.Abs(t.BillingAmount.Value), t.BillingCcy.Value, card ? t.CardAccountEntityId : null);
+            return new(match.SettlementLeg, DateOnly.FromDateTime(t.TransactionDate.Value),
+                MatchingEvidence.BillingAmountForMatching(t.ProductType, t.BillingAmount, t.IssMarkupAmount)!.Value,
+                t.BillingCcy.Value, card ? t.CardAccountEntityId : null);
         }
         Key? GlKey(StgGlEntry row)
         {
@@ -140,7 +148,27 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
         var reverseCards = new Dictionary<int, int>();
         foreach (var group in processors)
         {
-            if (!card) { groups.Add((group.Key, group.ToList(), candidates[group.Key].ToList())); continue; }
+            if (!card)
+            {
+                var available = candidates[group.Key].ToList();
+                var cash = new Queue<StgGlEntry>(available.Where(g => AtmWithdrawalMatching.IsCashGl(g.TranParticular))
+                    .OrderBy(g => g.StgGlEntryId));
+                var selectedGl = new HashSet<int>();
+                var rows = new List<ReconMatch>();
+                foreach (var m in group.OrderBy(m => m.ReconMatchId))
+                {
+                    var t = transactions[m.ProcessorStagingId];
+                    if (!AtmWithdrawalMatching.IsWithdrawal(t.TransactionCode, t.TransactionWording) || !cash.TryDequeue(out var g))
+                    {
+                        rows.Add(m);
+                        continue;
+                    }
+                    groups.Add((group.Key, [m], [g]));
+                    selectedGl.Add(g.StgGlEntryId);
+                }
+                if (rows.Count > 0) groups.Add((group.Key, rows, available.Where(g => !selectedGl.Contains(g.StgGlEntryId)).ToList()));
+                continue;
+            }
             foreach (var m in group)
             {
                 var options = new List<StgGlEntry>(2);
@@ -174,13 +202,15 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
             }
             var m = group.Rows.Single(); var g = available.Single();
             var transactionRow = transactions[m.ProcessorStagingId];
+            var isWithdrawalPair = !card && AtmWithdrawalMatching.IsWithdrawal(transactionRow.TransactionCode, transactionRow.TransactionWording)
+                && AtmWithdrawalMatching.IsCashGl(g.TranParticular);
             var processorReference = m.SettlementLeg == ReconSettlementLeg.CreditIntermediary
                 ? transactionRow.MicrofilmRefNumber?.Trim() : transactionRow.ReferenceNumber?.Trim();
             var glReference = g.TranParticular2?.Trim();
             if (m.SettlementLeg == ReconSettlementLeg.CreditIntermediary)
                 glReference = glReference is { Length: > 12 } ? glReference[12..].Trim() : null;
-            if (!CardIdentity.Compatible(transactionRow.CardAccountEntityId, g.TranRmks) ||
-                (!string.IsNullOrEmpty(processorReference) && !string.IsNullOrEmpty(glReference) && processorReference != glReference))
+            if (!isWithdrawalPair && (!CardIdentity.Compatible(transactionRow.CardAccountEntityId, g.TranRmks) ||
+                (!string.IsNullOrEmpty(processorReference) && !string.IsNullOrEmpty(glReference) && processorReference != glReference)))
             {
                 m.MatchComment = $"{methodLabel}: date, amount and currency agree, but supplied identity references conflict. Source review required.";
                 updatedMatches.Add(m);
@@ -202,12 +232,22 @@ public class SecondaryMatchService(IDbContextFactory<AppDbContext> factory,
             m.Ccy = group.Key.Currency;
             m.GlCcy = group.Key.Currency;
             m.Confidence = card ? 95m : 78m; // Rule evidence score, not a probability.
-            m.ScoreBreakdown = card
+            m.ScoreBreakdown = isWithdrawalPair ? AtmWithdrawalMatching.Evidence : card
                 ? $"{methodLabel}: exact card number, billing amount, currency and settlement leg; transaction date / GL value date within 2 days; unique on both sides."
                 : $"{MethodLabel}: exact transaction date / GL value date, billing amount, currency and settlement leg; unique on both sides.";
-            m.MatchComment = card
+            m.MatchComment = isWithdrawalPair
+                ? $"{AtmWithdrawalMatching.Evidence}. {group.Key.Date:yyyy-MM-dd}, {group.Key.Amount:0.####}, {IsoCurrencyCatalog.Display(group.Key.Currency)}."
+                : card
                 ? $"{methodLabel}: {group.Key.Date:yyyy-MM-dd}, {group.Key.Amount:0.####}, {IsoCurrencyCatalog.Display(group.Key.Currency)}. Card identity agrees; GL value-date difference {g.ValueDate!.Value.DayNumber - group.Key.Date.DayNumber} day(s)."
                 : $"{MethodLabel}: {group.Key.Date:yyyy-MM-dd}, {group.Key.Amount:0.####}, {IsoCurrencyCatalog.Display(group.Key.Currency)}. Medium confidence. No reference match.";
+            if (MatchingEvidence.IsCredit(transactionRow.ProductType))
+            {
+                var formula = $"CR billing minus ISS markup: {transactionRow.BillingAmount:0.####} - {transactionRow.IssMarkupAmount ?? 0m:0.####}; matching amount {group.Key.Amount:0.####}.";
+                m.ScoreBreakdown = $"{methodLabel}: billing minus ISS markup, currency and leg; " +
+                    (card ? "card and date window; " : "exact date; ") +
+                    (isWithdrawalPair ? "one-to-one withdrawal pairing." : "unique pair.");
+                m.MatchComment += " " + formula;
+            }
             if (adjacent) m.MatchComment += $" Adjacent GL batch #{g.ImportBatchId}, period {sourcePeriods[g.ImportBatchId]}.";
             usedGl.Add(g.StgGlEntryId);
             added++;

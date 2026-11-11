@@ -59,7 +59,7 @@ public class MatchingReviewService(IDbContextFactory<AppDbContext> factory,
             var t = transactions[m.ProcessorStagingId];
             var date = Date(t);
             return new(m.ReconMatchId, t.SourceRowNumber, category, t.TransactionCode ?? "", m.SettlementLeg,
-                date, t.BillingAmount.HasValue ? Math.Abs(t.BillingAmount.Value) : null, t.BillingCcy, count,
+                date, MatchingEvidence.BillingAmountForMatching(t.ProductType, t.BillingAmount, t.IssMarkupAmount), t.BillingCcy, count,
                 candidates.Take(5).Select(g => new ReviewGlEvidence(g.StgGlEntryId, g.SourceRowNumber, g.ValueDate,
                     Math.Abs(g.TranAmt ?? 0), MatchingEvidence.GlCurrency(g.TranCcyCode),
                     date.HasValue && g.ValueDate.HasValue ? g.ValueDate.Value.DayNumber - date.Value.DayNumber : null,
@@ -110,7 +110,7 @@ public class MatchingReviewService(IDbContextFactory<AppDbContext> factory,
                 return CardIdentity.Compatible(t.CardAccountEntityId, g.TranRmks) &&
                     (string.IsNullOrEmpty(processorReference) || string.IsNullOrEmpty(key) || processorReference == key);
             }
-            var candidates = available[(m.SettlementLeg, t.BillingCcy, Math.Abs(t.BillingAmount.Value))]
+            var candidates = available[(m.SettlementLeg, t.BillingCcy, MatchingEvidence.BillingAmountForMatching(t.ProductType, t.BillingAmount, t.IssMarkupAmount)!.Value)]
                 .Where(g => Math.Abs(g.ValueDate!.Value.DayNumber - date.Value.DayNumber) <= 2 && CompatibleReference(g)).ToList();
             edges[m.ReconMatchId] = candidates;
             foreach (var g in candidates) reverse[g.StgGlEntryId] = reverse.GetValueOrDefault(g.StgGlEntryId) + 1;

@@ -85,6 +85,86 @@ public class DailyReconServiceTests : IAsyncLifetime
         return gl.StgGlEntryId;
     }
 
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task Credit_daily_and_orphan_matching_use_billing_less_ISS(bool orphan)
+    {
+        await AddOutstanding(_runA, _procA, EarlyDay, amount: 103);
+        await AddUnassignedGl(_runB, _glB, orphan ? EarlyDay.AddDays(45) : EarlyDay, reference: "123456789012KEY");
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            var t = await db.StgInterchangeFees.SingleAsync();
+            t.ProductType = "CR"; t.IssMarkupAmount = 3; t.MicrofilmRefNumber = "KEY";
+            (await db.ReconMatches.SingleAsync()).SettlementLeg = ReconSettlementLeg.CreditIntermediary;
+            (await db.StgGlEntries.SingleAsync()).AcctNum = "9849077911";
+            if (orphan)
+                foreach (var r in await db.ReconRuns.ToListAsync())
+                {
+                    r.ParentPeriodRunId = null;
+                    r.PeriodGranularity = PeriodGranularity.Month;
+                }
+            await db.SaveChangesAsync();
+        }
+        var added = orphan ? (await Service.OrphanSweepAsync()).Added : (await Service.BackMatchAsync(_containerId)).Added;
+        Assert.Equal(1, added);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var match = await verify.ReconMatches.SingleAsync();
+        Assert.Equal(100m, match.ReconciliationAmount);
+        Assert.Equal(100m, match.GlAmount);
+        Assert.Equal(103m, match.BillingAmount);
+        Assert.Contains("billing minus ISS markup", match.ScoreBreakdown);
+        Assert.Empty(await verify.ReconExceptions.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(2, 2)] [InlineData(3, 2)] [InlineData(2, 3)]
+    public async Task Withdrawal_pairs_repeated_calendar_dates_across_daily_runs(int processors, int glCount)
+    {
+        for (var i = 0; i < processors; i++) await AddOutstanding(_runA, _procA, EarlyDay);
+        for (var i = 0; i < glCount; i++) await AddUnassignedGl(_runB, _glB, EarlyDay, reference: "GL" + i);
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            foreach (var t in await db.StgInterchangeFees.ToListAsync())
+            {
+                t.TransactionCode = "04";
+                t.TransactionWording = "ATM WITHDRAWAL";
+            }
+            foreach (var g in await db.StgGlEntries.ToListAsync()) g.TranParticular = "CASH/ATM";
+            await db.SaveChangesAsync();
+        }
+        var result = await Service.BackMatchAsync(_containerId);
+        Assert.Equal(Math.Min(processors, glCount), result.Added);
+        Assert.Equal(0, (await Service.BackMatchAsync(_containerId)).Added);
+        await using var verify = await Factory.CreateDbContextAsync();
+        var matched = await verify.ReconMatches.Where(m => m.MatchStatus == MatchStatus.Matched).ToListAsync();
+        Assert.Equal(matched.Count, matched.Select(m => m.GlStagingId).Distinct().Count());
+        Assert.All(matched, m => Assert.True(m.MatchedAcrossPeriods));
+        Assert.All(matched, m => Assert.Contains("time ignored", m.ScoreBreakdown));
+        Assert.Equal(Math.Max(0, glCount - processors), await verify.ReconExceptions.CountAsync(e => e.ExceptionType == MatchStatus.UnmatchedGl));
+        Assert.Equal(Math.Max(0, processors - glCount), await verify.ReconExceptions.CountAsync(e => e.ExceptionType == MatchStatus.UnmatchedProcessor));
+    }
+
+    [Theory]
+    [InlineData("date")] [InlineData("amount")] [InlineData("currency")]
+    [InlineData("leg")] [InlineData("channel")]
+    public async Task Withdrawal_daily_rule_requires_exact_key_and_cash_GL(string mismatch)
+    {
+        await AddOutstanding(_runA, _procA, EarlyDay, reference: "TRX");
+        await AddUnassignedGl(_runB, _glB, EarlyDay, reference: "OTHER");
+        await using (var db = await Factory.CreateDbContextAsync())
+        {
+            (await db.StgInterchangeFees.SingleAsync()).TransactionCode = "04";
+            var g = await db.StgGlEntries.SingleAsync();
+            g.TranParticular = mismatch == "channel" ? "POS/TEST" : "CASH/ATM";
+            if (mismatch == "date") g.ValueDate = EarlyDay.AddDays(1);
+            if (mismatch == "amount") g.TranAmt = 100.01m;
+            if (mismatch == "currency") g.TranCcyCode = "USD";
+            if (mismatch == "leg") g.AcctNum = "9849077911";
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(0, (await Service.BackMatchAsync(_containerId)).Added);
+    }
+
     [Fact]
     public async Task Back_match_resolves_outstanding_across_runs_and_is_idempotent()
     {

@@ -158,7 +158,7 @@ public class DailyReconService(IDbContextFactory<AppDbContext> factory,
 
         // Scope: standalone month batches (rolled-up daily months + classic monthly Bulk), one scheme.
         var runs = await db.ReconRuns.Where(r => r.Function == ReconFunction.InterchangeToGl
-                && r.ParentPeriodRunId == null && r.Status == ReconRunStatus.Completed && !r.IsArchived
+                && r.AnalysisOfRunId == null && r.ParentPeriodRunId == null && r.Status == ReconRunStatus.Completed && !r.IsArchived
                 && r.SchemeProfileId == schemeProfileId)
             .Select(r => new { r.ReconRunId, r.PeriodKey, r.PeriodStart, r.PeriodEnd }).ToListAsync(ct);
         if (runs.Count < 1)
@@ -221,7 +221,8 @@ public class DailyReconService(IDbContextFactory<AppDbContext> factory,
                 !transactions.TryGetValue(m.ProcessorStagingId, out var t) || t.OrigineCode?.Trim() == "0" ||
                 t.TransactionDate is null || t.BillingAmount is null || t.BillingCcy is null || t.BillingCcy <= 0)
                 return null;
-            return (new Key(m.SettlementLeg, Math.Abs(t.BillingAmount.Value), t.BillingCcy.Value), DateOnly.FromDateTime(t.TransactionDate.Value));
+            return (new Key(m.SettlementLeg, MatchingEvidence.BillingAmountForMatching(t.ProductType, t.BillingAmount, t.IssMarkupAmount)!.Value,
+                t.BillingCcy.Value), DateOnly.FromDateTime(t.TransactionDate.Value));
         }
         (Key Key, DateOnly Date)? GlKeyOf(StgGlEntry g)
         {
@@ -245,13 +246,39 @@ public class DailyReconService(IDbContextFactory<AppDbContext> factory,
         var procByKey = matches.Select(m => (Row: m, K: ProcKey(m))).Where(x => x.K is not null)
             .Select(x => (x.Row, x.K!.Value.Key, x.K!.Value.Date)).ToList();
 
+        // Reserve exact same-day withdrawal pairs before evaluating the general spread window.
+        // The unbounded orphan sweep still requires its reference anchor.
+        var withdrawalPairs = new Dictionary<int, StgGlEntry>();
+        var withdrawalGl = new HashSet<int>();
+        if (!requireReference)
+        {
+            var cashGl = glRows.Where(g => AtmWithdrawalMatching.IsCashGl(g.TranParticular))
+                .Select(g => (Row: g, K: GlKeyOf(g))).Where(x => x.K is not null)
+                .GroupBy(x => x.K!.Value)
+                .ToDictionary(g => g.Key, g => new Queue<StgGlEntry>(g.Select(x => x.Row).OrderBy(x => x.StgGlEntryId)));
+            foreach (var (m, key, date) in procByKey.OrderBy(x => x.Row.ReconMatchId))
+            {
+                var t = transactions[m.ProcessorStagingId];
+                if (!AtmWithdrawalMatching.IsWithdrawal(t.TransactionCode, t.TransactionWording) ||
+                    !cashGl.TryGetValue((key, date), out var queue) || !queue.TryDequeue(out var g)) continue;
+                withdrawalPairs[m.ReconMatchId] = g;
+                withdrawalGl.Add(g.StgGlEntryId);
+            }
+        }
+
         var glCandidateCount = new Dictionary<int, int>();
         var perProc = new List<(ReconMatch Match, DateOnly Date, List<StgGlEntry> Options)>();
         foreach (var (m, key, date) in procByKey)
         {
+            if (withdrawalPairs.TryGetValue(m.ReconMatchId, out var withdrawal))
+            {
+                perProc.Add((m, date, [withdrawal]));
+                continue;
+            }
             var options = new List<StgGlEntry>(2);
             foreach (var (g, gdate) in glByKey[key])
             {
+                if (withdrawalGl.Contains(g.StgGlEntryId)) continue;
                 if (!CandidateOk(m, g, Math.Abs(gdate.DayNumber - date.DayNumber))) continue;
                 if (options.Count < 2) options.Add(g);
                 glCandidateCount[g.StgGlEntryId] = glCandidateCount.GetValueOrDefault(g.StgGlEntryId) + 1;
@@ -266,7 +293,8 @@ public class DailyReconService(IDbContextFactory<AppDbContext> factory,
         foreach (var (m, date, options) in perProc)
         {
             if (options.Count == 0) continue;
-            if (options.Count > 1 || glCandidateCount[options[0].StgGlEntryId] != 1)
+            var isWithdrawalPair = withdrawalPairs.ContainsKey(m.ReconMatchId);
+            if (!isWithdrawalPair && (options.Count > 1 || glCandidateCount[options[0].StgGlEntryId] != 1))
             {
                 if (m.MatchStatus != MatchStatus.Ambiguous)
                 {
@@ -294,8 +322,18 @@ public class DailyReconService(IDbContextFactory<AppDbContext> factory,
             m.Ccy = currency;
             m.GlCcy = currency;
             m.Confidence = 78m; // rule evidence, not a probability
-            m.ScoreBreakdown = $"{methodLabel}: {basis}exact billing amount, currency and settlement leg; unique on both sides.";
+            m.ScoreBreakdown = isWithdrawalPair ? AtmWithdrawalMatching.Evidence
+                : $"{methodLabel}: {basis}exact billing amount, currency and settlement leg; unique on both sides.";
             m.MatchComment = $"{methodLabel}: {date:yyyy-MM-dd} ↔ GL value date {g.ValueDate:yyyy-MM-dd}, {m.GlAmount:0.####}, {IsoCurrencyCatalog.Display(currency)}. GL batch #{g.ImportBatchId}.";
+            var transactionRow = transactions[m.ProcessorStagingId];
+            if (MatchingEvidence.IsCredit(transactionRow.ProductType))
+            {
+                var formula = $"CR billing minus ISS markup: {transactionRow.BillingAmount:0.####} - {transactionRow.IssMarkupAmount ?? 0m:0.####}; matching amount {m.ReconciliationAmount:0.####}.";
+                m.ScoreBreakdown = $"{methodLabel}: billing minus ISS markup, currency and leg; " +
+                    (requireReference ? "exact reference; " : isWithdrawalPair ? "exact date; " : "date within spread; ") +
+                    (isWithdrawalPair ? "one-to-one withdrawal pairing." : "unique pair.");
+                m.MatchComment += " " + formula;
+            }
             usedGl.Add(g.StgGlEntryId);
             glCandidateCount[g.StgGlEntryId] = -1;
             glOwnerResolved.Add(g.StgGlEntryId);

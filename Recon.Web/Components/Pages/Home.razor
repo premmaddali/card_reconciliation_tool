@@ -107,10 +107,10 @@ else
         _batchCount = await db.ImportBatches.CountAsync();
         _rowCount = await parsed.SumAsync(b => (long)b.RowCount);
         _sourcesLoaded = await parsed.Select(b => b.SourceType).Distinct().CountAsync();
-        _runCount = await db.ReconRuns.CountAsync();
-        _runs = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed)
+        _runCount = await db.ReconRuns.CountAsync(r => r.AnalysisOfRunId == null);
+        _runs = await db.ReconRuns.Where(r => r.AnalysisOfRunId == null && r.Status == ReconRunStatus.Completed)
             .OrderByDescending(r => r.CreatedDate).Take(8).ToListAsync();
-        var completed = await db.ReconRuns.Where(r => r.Status == ReconRunStatus.Completed && !r.IsArchived)
+        var completed = await db.ReconRuns.Where(r => r.AnalysisOfRunId == null && r.Status == ReconRunStatus.Completed && !r.IsArchived)
             .Select(r => new { r.Function, r.ExceptionCount }).ToListAsync();
         _runDistribution = completed.GroupBy(r => r.Function).OrderByDescending(g => g.Count())
             .Select((g, i) => new AnalyticsSegment(FunctionName(g.Key), g.LongCount(), ChartColors[i % ChartColors.Length])).ToList();
