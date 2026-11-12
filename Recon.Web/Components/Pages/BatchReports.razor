@@ -1,0 +1,408 @@
+@page "/reports/batch-exceptions"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+@using Recon.Web.Domain.Reference
+@using System.Globalization
+
+<PageTitle>Batch reports · Recon Tool</PageTitle>
+
+<PageHeader Title="Batch reports" Subtitle="Consolidated exceptions across reconciliation runs" Eyebrow="Reconciliation" Icon="exceptions"
+            Breadcrumbs="@(new[] { "Reconciliation", "Batch reports" })" />
+
+<!-- Filter Controls -->
+<div class="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-800/80">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Function</label>
+            <select @bind="_selectedFunction" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+                <option value="">All functions</option>
+                <option value="@((int)ReconFunction.InterchangeToGl)">Bulk recon (Interchange → GL)</option>
+                <option value="@((int)ReconFunction.AtmToGl)">ATM recon (ATM → GL)</option>
+                <option value="@((int)ReconFunction.PosToGl)">POS recon (POS → GL)</option>
+                <option value="@((int)ReconFunction.NetworkToAtm)">Network ↔ ATM recon</option>
+            </select>
+        </div>
+
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</label>
+            <select @bind="_selectedStatus" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+                <option value="">All statuses</option>
+                <option value="@((int)ExceptionStatus.Open)">Open</option>
+                <option value="@((int)ExceptionStatus.Investigating)">Investigating</option>
+                <option value="@((int)ExceptionStatus.Resolved)">Resolved</option>
+                <option value="@((int)ExceptionStatus.WrittenOff)">Written off</option>
+            </select>
+        </div>
+
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Exception type</label>
+            <select @bind="_selectedType" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+                <option value="">All types</option>
+                <option value="@((int)MatchStatus.UnmatchedProcessor)">No GL match</option>
+                <option value="@((int)MatchStatus.UnmatchedGl)">GL unmatched</option>
+                <option value="@((int)MatchStatus.AmountMismatch)">Amount mismatch</option>
+                <option value="@((int)MatchStatus.Ambiguous)">Ambiguous</option>
+                <option value="@((int)MatchStatus.Duplicate)">Duplicate</option>
+            </select>
+        </div>
+
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Currency</label>
+            <select @bind="_selectedCcy" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+                <option value="">All currencies</option>
+                @foreach (var ccy in _availableCurrencies)
+                {
+                    <option value="@ccy">@IsoCurrencyCatalog.Display(ccy)</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">From date</label>
+            <input type="date" @bind="_fromDate" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">To date</label>
+            <input type="date" @bind="_toDate" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+        <div class="sm:col-span-2">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search reference / account</label>
+            <input type="text" placeholder="Filter by reference number or account..." @bind="_searchText" @bind:event="oninput" @bind:after="OnFilterChanged" class="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+    </div>
+
+    <!-- Batch Multi-Select Chips -->
+    <div class="mt-5 border-t border-gray-100 pt-4 dark:border-gray-700/60">
+        <div class="mb-2 flex items-center justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Batches in scope (@_selectedBatchIds.Count selected of @_availableBatches.Count)</span>
+            <div class="space-x-2 text-xs">
+                <button type="button" @onclick="SelectAllBatches" class="font-medium text-primary-600 hover:underline dark:text-primary-400">Select all</button>
+                <span class="text-gray-300 dark:text-gray-600">|</span>
+                <button type="button" @onclick="ClearBatchSelection" class="font-medium text-gray-500 hover:underline dark:text-gray-400">Clear</button>
+            </div>
+        </div>
+        <div class="flex max-h-32 flex-wrap gap-2 overflow-y-auto py-1">
+            @foreach (var b in _availableBatches)
+            {
+                var isSelected = _selectedBatchIds.Contains(b.RunId);
+                <button type="button" @onclick="() => ToggleBatch(b.RunId)"
+                        class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors @(isSelected ? "border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-950/40 dark:text-primary-300" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700")">
+                    <span>#@b.RunId (@b.PeriodKey)</span>
+                    <span class="rounded-full px-1.5 py-0.2 text-[10px] @(isSelected ? "bg-primary-200 text-primary-800 dark:bg-primary-800 dark:text-primary-200" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300")">@b.ExceptionCount</span>
+                </button>
+            }
+        </div>
+    </div>
+
+    <!-- Actions Bar -->
+    <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4 dark:border-gray-700/60">
+        <div class="text-sm text-gray-600 dark:text-gray-400">
+            Found <span class="font-bold text-gray-900 dark:text-white">@_totalCount</span> exception(s)
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="@ExportUrl("xlsx")" target="_blank" class="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+                <svg class="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
+                Export Excel (.xlsx)
+            </a>
+            <a href="@ExportUrl("csv")" target="_blank" class="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+                <svg class="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                Export CSV
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Consolidated Table -->
+<div class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-800/80">
+    <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+            <thead class="border-b border-gray-100 bg-gray-50 text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
+                <tr>
+                    <th class="px-4 py-3">Batch</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Type</th>
+                    <th class="px-4 py-3">Reference</th>
+                    <th class="px-4 py-3">Account details</th>
+                    <th class="px-4 py-3 text-right">Proc Amount</th>
+                    <th class="px-4 py-3 text-right">GL Amount</th>
+                    <th class="px-4 py-3 text-right">Difference</th>
+                    <th class="px-4 py-3">Ccy</th>
+                    <th class="px-4 py-3">Date</th>
+                    <th class="px-4 py-3">Narrative</th>
+                    <th class="px-4 py-3 text-center">Action</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                @if (_loading)
+                {
+                    <tr><td colspan="12" class="px-4 py-12 text-center text-sm text-gray-500">Loading exceptions...</td></tr>
+                }
+                else if (_exceptions.Count == 0)
+                {
+                    <tr><td colspan="12" class="px-4 py-12 text-center text-sm text-gray-500">No exceptions match the selected criteria.</td></tr>
+                }
+                else
+                {
+                    @foreach (var ex in _exceptions)
+                    {
+                        <tr @key="ex.ReconExceptionId" class="hover:bg-gray-50/80 dark:hover:bg-gray-700/30">
+                            <td class="px-4 py-2.5 font-semibold text-primary-700 dark:text-primary-300">
+                                <a href="@($"/recon/run/{ex.ReconRunId}?filter=exception")" class="hover:underline">#@ex.ReconRunId</a>
+                            </td>
+                            <td class="px-4 py-2.5">
+                                <StatusBadge Text="@ex.Status.ToString()" Color="@StatusColor(ex.Status)" />
+                            </td>
+                            <td class="px-4 py-2.5 font-medium text-gray-800 dark:text-gray-200">
+                                @HumanizeType(ex.ExceptionType)
+                            </td>
+                            <td class="px-4 py-2.5 font-mono text-gray-700 dark:text-gray-300">
+                                @(string.IsNullOrEmpty(ex.ReferenceNumber) ? "—" : ex.ReferenceNumber)
+                            </td>
+                            <td class="px-4 py-2.5 text-gray-600 dark:text-gray-400">
+                                @if (!string.IsNullOrEmpty(ex.ProcessorAccountNumber))
+                                {
+                                    <div><span class="text-[10px] uppercase text-gray-400">Proc:</span> @ex.ProcessorAccountNumber</div>
+                                }
+                                @if (!string.IsNullOrEmpty(ex.GlAccountNumber))
+                                {
+                                    <div><span class="text-[10px] uppercase text-gray-400">GL:</span> @ex.GlAccountNumber</div>
+                                }
+                            </td>
+                            <td class="px-4 py-2.5 text-right font-medium text-gray-900 dark:text-white">
+                                @(ex.ActualAmount?.ToString("N2", CultureInfo.InvariantCulture) ?? "—")
+                            </td>
+                            <td class="px-4 py-2.5 text-right font-medium text-gray-900 dark:text-white">
+                                @(ex.ExpectedAmount?.ToString("N2", CultureInfo.InvariantCulture) ?? "—")
+                            </td>
+                            <td class="px-4 py-2.5 text-right font-semibold @(ex.Difference > 0 ? "text-red-600 dark:text-red-400" : "text-gray-500")">
+                                @(ex.Difference?.ToString("N2", CultureInfo.InvariantCulture) ?? "—")
+                            </td>
+                            <td class="px-4 py-2.5 text-gray-600 dark:text-gray-300">
+                                @IsoCurrencyCatalog.Display(ex.Ccy)
+                            </td>
+                            <td class="px-4 py-2.5 text-gray-500 dark:text-gray-400">
+                                @(ex.TxnDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "—")
+                            </td>
+                            <td class="max-w-xs truncate px-4 py-2.5 text-gray-600 dark:text-gray-400" title="@ex.Narrative">
+                                @ex.Narrative
+                            </td>
+                            <td class="px-4 py-2.5 text-center">
+                                <a href="@($"/recon/run/{ex.ReconRunId}?filter=exception")" class="inline-flex items-center rounded-lg bg-gray-100 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">
+                                    Open
+                                </a>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    @if (_totalPages > 1)
+    {
+        <div class="flex items-center justify-between border-t border-gray-100 px-4 py-3 dark:border-gray-700 sm:px-6">
+            <div class="text-xs text-gray-500">
+                Page <span class="font-bold text-gray-900 dark:text-white">@_page</span> of <span class="font-bold text-gray-900 dark:text-white">@_totalPages</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <button type="button" @onclick="PrevPage" disabled="@(_page <= 1)" class="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300">
+                    Previous
+                </button>
+                <button type="button" @onclick="NextPage" disabled="@(_page >= _totalPages)" class="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300">
+                    Next
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private record BatchInfo(int RunId, string PeriodKey, int ExceptionCount, ReconFunction Function, DateTime CreatedDate);
+
+    private bool _loading = true;
+    private List<ReconException> _exceptions = [];
+    private List<BatchInfo> _availableBatches = [];
+    private HashSet<int> _selectedBatchIds = [];
+    private List<int> _availableCurrencies = [];
+
+    private string _selectedFunction = "";
+    private string _selectedStatus = "";
+    private string _selectedType = "";
+    private string _selectedCcy = "";
+    private DateOnly? _fromDate;
+    private DateOnly? _toDate;
+    private string _searchText = "";
+
+    private int _page = 1;
+    private const int PageSize = 50;
+    private int _totalCount = 0;
+    private int _totalPages = 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMetadataAsync();
+        await LoadExceptionsAsync();
+    }
+
+    private async Task LoadMetadataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var batches = await db.ReconRuns.AsNoTracking()
+            .Where(r => r.AnalysisOfRunId == null && r.ExceptionCount > 0)
+            .OrderByDescending(r => r.CreatedDate)
+            .Take(60)
+            .Select(r => new BatchInfo(r.ReconRunId, r.PeriodKey, r.ExceptionCount, r.Function, r.CreatedDate))
+            .ToListAsync();
+
+        _availableBatches = batches;
+        _selectedBatchIds = batches.Select(b => b.RunId).ToHashSet();
+
+        _availableCurrencies = await db.ReconExceptions.AsNoTracking()
+            .Where(e => e.Ccy != null)
+            .Select(e => e.Ccy!.Value)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+    }
+
+    private async Task LoadExceptionsAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var query = db.ReconExceptions.AsNoTracking()
+            .Include(e => e.ReconRun)
+            .AsQueryable();
+
+        // Scope to selected batches if any, else all non-analysis runs
+        if (_selectedBatchIds.Count > 0)
+        {
+            query = query.Where(e => _selectedBatchIds.Contains(e.ReconRunId));
+        }
+        else
+        {
+            query = query.Where(e => e.ReconRun.AnalysisOfRunId == null);
+        }
+
+        if (int.TryParse(_selectedFunction, out var fn))
+        {
+            query = query.Where(e => (int)e.ReconRun.Function == fn);
+        }
+        if (int.TryParse(_selectedStatus, out var status))
+        {
+            query = query.Where(e => (int)e.Status == status);
+        }
+        if (int.TryParse(_selectedType, out var type))
+        {
+            query = query.Where(e => (int)e.ExceptionType == type);
+        }
+        if (int.TryParse(_selectedCcy, out var ccy))
+        {
+            query = query.Where(e => e.Ccy == ccy);
+        }
+        if (_fromDate.HasValue)
+        {
+            query = query.Where(e => e.TxnDate >= _fromDate.Value);
+        }
+        if (_toDate.HasValue)
+        {
+            query = query.Where(e => e.TxnDate <= _toDate.Value);
+        }
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var search = _searchText.Trim();
+            query = query.Where(e =>
+                (e.ReferenceNumber != null && e.ReferenceNumber.Contains(search)) ||
+                (e.ProcessorAccountNumber != null && e.ProcessorAccountNumber.Contains(search)) ||
+                (e.GlAccountNumber != null && e.GlAccountNumber.Contains(search)));
+        }
+
+        _totalCount = await query.CountAsync();
+        _totalPages = Math.Max(1, (_totalCount + PageSize - 1) / PageSize);
+        if (_page > _totalPages) _page = _totalPages;
+
+        _exceptions = await query
+            .OrderByDescending(e => e.ReconExceptionId)
+            .Skip((_page - 1) * PageSize)
+            .Take(PageSize)
+            .ToListAsync();
+
+        _loading = false;
+    }
+
+    private async Task OnFilterChanged()
+    {
+        _page = 1;
+        await LoadExceptionsAsync();
+    }
+
+    private async Task ToggleBatch(int runId)
+    {
+        if (!_selectedBatchIds.Add(runId)) _selectedBatchIds.Remove(runId);
+        _page = 1;
+        await LoadExceptionsAsync();
+    }
+
+    private async Task SelectAllBatches()
+    {
+        _selectedBatchIds = _availableBatches.Select(b => b.RunId).ToHashSet();
+        _page = 1;
+        await LoadExceptionsAsync();
+    }
+
+    private async Task ClearBatchSelection()
+    {
+        _selectedBatchIds.Clear();
+        _page = 1;
+        await LoadExceptionsAsync();
+    }
+
+    private async Task PrevPage()
+    {
+        if (_page > 1)
+        {
+            _page--;
+            await LoadExceptionsAsync();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (_page < _totalPages)
+        {
+            _page++;
+            await LoadExceptionsAsync();
+        }
+    }
+
+    private string ExportUrl(string format)
+    {
+        var runIds = string.Join(",", _selectedBatchIds);
+        return $"/api/reports/batch-exceptions.{format}?batchIds={runIds}&function={_selectedFunction}&status={_selectedStatus}&type={_selectedType}&ccy={_selectedCcy}&from={_fromDate:yyyy-MM-dd}&to={_toDate:yyyy-MM-dd}&search={Uri.EscapeDataString(_searchText ?? "")}";
+    }
+
+    private static string StatusColor(ExceptionStatus status) => status switch
+    {
+        ExceptionStatus.Open => "red",
+        ExceptionStatus.Investigating => "amber",
+        ExceptionStatus.Resolved => "green",
+        ExceptionStatus.WrittenOff => "gray",
+        _ => "gray"
+    };
+
+    private static string HumanizeType(MatchStatus status) => status switch
+    {
+        MatchStatus.UnmatchedProcessor => "No GL match",
+        MatchStatus.UnmatchedGl => "GL unmatched",
+        MatchStatus.AmountMismatch => "Amount mismatch",
+        MatchStatus.Ambiguous => "Ambiguous",
+        MatchStatus.Duplicate => "Duplicate",
+        _ => status.ToString()
+    };
+}

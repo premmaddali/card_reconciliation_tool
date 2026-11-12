@@ -17,6 +17,17 @@
 
 <PageTitle>Batch #@RunId · Recon Tool</PageTitle>
 
+@if (_loadError is not null)
+{
+    <div role="alert" class="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+        <ExclamationTriangleIcon Class="mt-0.5 h-5 w-5 shrink-0" />
+        <div>
+            <p class="font-semibold">Unable to load batch details completely</p>
+            <p class="mt-0.5">@_loadError</p>
+        </div>
+    </div>
+}
+
 @if (_run is null)
 {
     <p class="text-sm text-gray-500 dark:text-gray-400">Loading batch…</p>
@@ -591,7 +602,9 @@ else
 
 @code {
     [Parameter] public int RunId { get; set; }
+    [SupplyParameterFromQuery(Name = "filter")] public string? InitialFilter { get; set; }
     [SupplyParameterFromQuery(Name = "sourcePeriodAdjusted")] public bool SourcePeriodAdjusted { get; set; }
+    private string? _loadError;
 
     private enum Tab { Transactions, OnUsAtmTransactions, Gl, GlBulk, Reconciliation, NetworkValidation, NetworkTransactions }
     private Tab _tab = Tab.Reconciliation;
@@ -856,105 +869,125 @@ else
 
     protected override async Task OnParametersSetAsync()
     {
-        var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
-        _canSecondaryMatch = grants.TryGetValue("BULKRECON", out var bulkGrant) && bulkGrant.CanView && (bulkGrant.CanAdd || bulkGrant.CanEdit);
-        _canArchive = grants.TryGetValue("ARCHIVE_BATCH", out var archiveGrant) && archiveGrant.CanEdit;
-        _canFreeze = grants.TryGetValue("FREEZE_PERIOD", out var freezeGrant) && freezeGrant.CanEdit;
-        _canManualGlMatch = grants.TryGetValue("MANUAL_GL_MATCH", out var manualGlGrant) && manualGlGrant.CanEdit;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _run = await db.ReconRuns.FirstOrDefaultAsync(r => r.ReconRunId == RunId);
-        if (_run is null) return;
-        _sourceProcessorBatchIds = [_run.ProcessorBatchId];
-        _sourceGlBatchIds = _run.GlBatchId is int glId ? [glId] : [];
-        if (_run.Function == ReconFunction.InterchangeToGl && _run.GlBatchId != null)
+        _loadError = null;
+        try
         {
-            var inputs = await Recon.Web.Services.Recon.ReconAnalysisInputs.LoadAsync(db, _run, default);
-            _sourceProcessorBatchIds = inputs.ProcessorBatchIds;
-            _sourceGlBatchIds = inputs.GlBatchIds;
-        }
-        _analyses = await db.ReconRuns.Where(r => r.AnalysisOfRunId == (_run.AnalysisOfRunId ?? RunId))
-            .OrderByDescending(r => r.ReconRunId).Take(10).ToListAsync();
-        if (_run.AnalysisOfRunId is not null) _canArchive = _canFreeze = _canManualGlMatch = false;
-        _passes = await db.ReconRunPasses.Where(p => p.ReconRunId == RunId).OrderBy(p => p.RunAt).ToListAsync();
-        var userRoleIds = await db.UserAppAccesses.Where(x => x.UserId == CurrentUser.UserId && x.IsActive).Select(x => x.AppAccessId).ToListAsync();
-        _canVerify = _run.VerificationStatus == ReconVerificationStatus.AwaitingVerification && _run.CurrentWorkflowStepId is not null
-            && await db.ReconWorkflowActors.AnyAsync(a => a.ReconRunId == RunId && a.ReconWorkflowStepId == _run.CurrentWorkflowStepId
-                && a.Status == ReconWorkflowActorStatus.AwaitingAction && userRoleIds.Contains(a.AppAccessId));
+            var grants = await Permissions.GetGrantsAsync(CurrentUser.UserId);
+            _canSecondaryMatch = grants.TryGetValue("BULKRECON", out var bulkGrant) && bulkGrant.CanView && (bulkGrant.CanAdd || bulkGrant.CanEdit);
+            _canArchive = grants.TryGetValue("ARCHIVE_BATCH", out var archiveGrant) && archiveGrant.CanEdit;
+            _canFreeze = grants.TryGetValue("FREEZE_PERIOD", out var freezeGrant) && freezeGrant.CanEdit;
+            _canManualGlMatch = grants.TryGetValue("MANUAL_GL_MATCH", out var manualGlGrant) && manualGlGrant.CanEdit;
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _run = await db.ReconRuns.FirstOrDefaultAsync(r => r.ReconRunId == RunId);
+            if (_run is null) return;
+            _sourceProcessorBatchIds = [_run.ProcessorBatchId];
+            _sourceGlBatchIds = _run.GlBatchId is int glId ? [glId] : [];
+            if (_run.Function == ReconFunction.InterchangeToGl && _run.GlBatchId != null)
+            {
+                try
+                {
+                    var inputs = await Recon.Web.Services.Recon.ReconAnalysisInputs.LoadAsync(db, _run, default);
+                    _sourceProcessorBatchIds = inputs.ProcessorBatchIds;
+                    _sourceGlBatchIds = inputs.GlBatchIds;
+                }
+                catch
+                {
+                    // Fall back gracefully to single-batch mode
+                }
+            }
+            _analyses = await db.ReconRuns.Where(r => r.AnalysisOfRunId == (_run.AnalysisOfRunId ?? RunId))
+                .OrderByDescending(r => r.ReconRunId).Take(10).ToListAsync();
+            if (_run.AnalysisOfRunId is not null) _canArchive = _canFreeze = _canManualGlMatch = false;
+            _passes = await db.ReconRunPasses.Where(p => p.ReconRunId == RunId).OrderBy(p => p.RunAt).ToListAsync();
+            var userRoleIds = await db.UserAppAccesses.Where(x => x.UserId == CurrentUser.UserId && x.IsActive).Select(x => x.AppAccessId).ToListAsync();
+            _canVerify = _run.VerificationStatus == ReconVerificationStatus.AwaitingVerification && _run.CurrentWorkflowStepId is not null
+                && await db.ReconWorkflowActors.AnyAsync(a => a.ReconRunId == RunId && a.ReconWorkflowStepId == _run.CurrentWorkflowStepId
+                    && a.Status == ReconWorkflowActorStatus.AwaitingAction && userRoleIds.Contains(a.AppAccessId));
 
-        await LoadMonthlySummariesAsync(db);
-        _exceptionCurrencies = await db.ReconExceptions.Where(e => e.ReconRunId == RunId && e.Ccy != null)
-            .Select(e => e.Ccy!.Value).Distinct().OrderBy(x => x).ToListAsync();
-        _processorExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType != MatchStatus.UnmatchedGl);
-        _glOnlyExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType == MatchStatus.UnmatchedGl);
+            await LoadMonthlySummariesAsync(db);
+            _exceptionCurrencies = await db.ReconExceptions.Where(e => e.ReconRunId == RunId && e.Ccy != null)
+                .Select(e => e.Ccy!.Value).Distinct().OrderBy(x => x).ToListAsync();
+            _processorExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType != MatchStatus.UnmatchedGl);
+            _glOnlyExceptionCount = await db.ReconExceptions.CountAsync(e => e.ReconRunId == RunId && e.ExceptionType == MatchStatus.UnmatchedGl);
 
-        var accountMap = await db.GlSettlementAccounts.Where(a => a.IsActive)
-            .Select(a => new { a.AcctNum, a.Ccy, a.Role }).ToListAsync();
-        _cardholderAccts = accountMap.Select(a => a.AcctNum).ToList();
-        _glAccountCurrencies = accountMap.ToDictionary(a => a.AcctNum, a => a.Ccy);
-        _glCurrencies = accountMap.Select(a => a.Ccy).Distinct().OrderBy(x => x).ToList();
-        _debitAccounts = accountMap.Where(a => a.Role == GlAccountRole.CardholderSettlement).Select(a => a.AcctNum).ToList();
+            var accountMap = await db.GlSettlementAccounts.Where(a => a.IsActive)
+                .Select(a => new { a.AcctNum, a.Ccy, a.Role }).ToListAsync();
+            _cardholderAccts = accountMap.Select(a => a.AcctNum).ToList();
+            _glAccountCurrencies = accountMap.ToDictionary(a => a.AcctNum, a => a.Ccy);
+            _glCurrencies = accountMap.Select(a => a.Ccy).Distinct().OrderBy(x => x).ToList();
+            _debitAccounts = accountMap.Where(a => a.Role == GlAccountRole.CardholderSettlement).Select(a => a.AcctNum).ToList();
 
-        _transactionCurrencies = _run.Function == ReconFunction.InterchangeToGl
-            ? await db.StgInterchangeFees.Where(x => _sourceProcessorBatchIds.Contains(x.ImportBatchId) && x.TxnCcy != null)
-                .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync()
-            : await db.StgDebitSettlements.Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.TxnCcy != null)
-                .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync();
-        if (_run.Function == ReconFunction.NetworkToAtm && _run.NetworkBatchId is not null)
-        {
-            var netCcys = await db.StgNetworkT464.Where(x => x.ImportBatchId == _run.NetworkBatchId.Value && x.TxnCcy != null)
-                .Select(x => x.TxnCcy!.Value).Distinct().ToListAsync();
-            _transactionCurrencies = _transactionCurrencies.Concat(netCcys).Distinct().OrderBy(x => x).ToList();
-        }
-        _processorDescriptionOptions = await db.ReconMatches
-            .Where(m => m.ReconRunId == RunId && m.ProcessorDescription != null && m.ProcessorDescription != "")
-            .Select(m => m.ProcessorDescription!)
-            .Distinct()
-            .OrderBy(x => x)
-            .Take(500)
-            .ToListAsync();
+            _transactionCurrencies = _run.Function == ReconFunction.InterchangeToGl
+                ? await db.StgInterchangeFees.Where(x => _sourceProcessorBatchIds.Contains(x.ImportBatchId) && x.TxnCcy != null)
+                    .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync()
+                : await db.StgDebitSettlements.Where(x => x.ImportBatchId == _run.ProcessorBatchId && x.TxnCcy != null)
+                    .Select(x => x.TxnCcy!.Value).Distinct().OrderBy(x => x).ToListAsync();
+            if (_run.Function == ReconFunction.NetworkToAtm && _run.NetworkBatchId is not null)
+            {
+                var netCcys = await db.StgNetworkT464.Where(x => x.ImportBatchId == _run.NetworkBatchId.Value && x.TxnCcy != null)
+                    .Select(x => x.TxnCcy!.Value).Distinct().ToListAsync();
+                _transactionCurrencies = _transactionCurrencies.Concat(netCcys).Distinct().OrderBy(x => x).ToList();
+            }
+            _processorDescriptionOptions = await db.ReconMatches
+                .Where(m => m.ReconRunId == RunId && m.ProcessorDescription != null && m.ProcessorDescription != "")
+                .Select(m => m.ProcessorDescription!)
+                .Distinct()
+                .OrderBy(x => x)
+                .Take(500)
+                .ToListAsync();
 
-        _trxTotal = await TrxQuery(db).CountAsync();
-        _onUsAtmTotal = _run.Function == ReconFunction.InterchangeToGl ? await OnUsAtmQuery(db).CountAsync() : 0;
-        if (_run.NetworkBatchId is not null)
-        {
-            _networkTrxTotal = await NetworkTrxQuery(db).CountAsync();
-        }
-        else
-        {
-            _networkTrxTotal = 0;
-        }
-        if (_run.GlBatchId is not null)
-        {
-            _glTotal = await GlQuery(db).CountAsync();
-            _glBulkTotal = await GlBulkQuery(db).CountAsync();
-        }
-        else
-        {
-            _glTotal = _glBulkTotal = 0;
-        }
+            _trxTotal = await TrxQuery(db).CountAsync();
+            _onUsAtmTotal = _run.Function == ReconFunction.InterchangeToGl ? await OnUsAtmQuery(db).CountAsync() : 0;
+            if (_run.NetworkBatchId is not null)
+            {
+                _networkTrxTotal = await NetworkTrxQuery(db).CountAsync();
+            }
+            else
+            {
+                _networkTrxTotal = 0;
+            }
+            if (_run.GlBatchId is not null)
+            {
+                _glTotal = await GlQuery(db).CountAsync();
+                _glBulkTotal = await GlBulkQuery(db).CountAsync();
+            }
+            else
+            {
+                _glTotal = _glBulkTotal = 0;
+            }
 
-        if (_run.Function == ReconFunction.InterchangeToGl)
-        {
-            var interchangeRows = await db.StgInterchangeFees.CountAsync(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0"));
-            var glRows = await db.StgGlEntries.CountAsync(x => x.ImportBatchId == _run.GlBatchId);
-            var interchangeDuplicates = await db.StgInterchangeFees
-                .Where(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0") && x.ReferenceNumber != null && x.ReferenceNumber != "")
-                .GroupBy(x => x.ReferenceNumber!).Where(g => g.Count() > 1)
-                .Select(g => new { Reference = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).ThenBy(x => x.Reference).ToListAsync();
-            var glDuplicates = await db.StgGlEntries
-                .Where(x => x.ImportBatchId == _run.GlBatchId && x.TranParticular2 != null && x.TranParticular2 != "")
-                .GroupBy(x => x.TranParticular2!).Where(g => g.Count() > 1)
-                .Select(g => new { Reference = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).ThenBy(x => x.Reference).ToListAsync();
-            var interchangeDuplicateRows = interchangeDuplicates.Select(x => new DuplicateReference(x.Reference, x.Count)).ToList();
-            var glDuplicateRows = glDuplicates.Select(x => new DuplicateReference(x.Reference, x.Count)).ToList();
-            _interchangeAudit = new(interchangeRows, glRows, Math.Abs(interchangeRows - glRows), interchangeDuplicateRows.Count, interchangeDuplicateRows.Sum(x => x.Count - 1), glDuplicateRows.Count, glDuplicateRows.Sum(x => x.Count - 1), interchangeDuplicateRows, glDuplicateRows);
-        }
-        else _interchangeAudit = null;
+            if (_run.Function == ReconFunction.InterchangeToGl && _run.GlBatchId is int glBatchId)
+            {
+                var interchangeRows = await db.StgInterchangeFees.CountAsync(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0"));
+                var glRows = await db.StgGlEntries.CountAsync(x => x.ImportBatchId == glBatchId);
+                var interchangeDuplicates = await db.StgInterchangeFees
+                    .Where(x => x.ImportBatchId == _run.ProcessorBatchId && (x.OrigineCode == null || x.OrigineCode.Trim() != "0") && x.ReferenceNumber != null && x.ReferenceNumber != "")
+                    .GroupBy(x => x.ReferenceNumber!).Where(g => g.Count() > 1)
+                    .Select(g => new { Reference = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).ThenBy(x => x.Reference).ToListAsync();
+                var glDuplicates = await db.StgGlEntries
+                    .Where(x => x.ImportBatchId == glBatchId && x.TranParticular2 != null && x.TranParticular2 != "")
+                    .GroupBy(x => x.TranParticular2!).Where(g => g.Count() > 1)
+                    .Select(g => new { Reference = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).ThenBy(x => x.Reference).ToListAsync();
+                var interchangeDuplicateRows = interchangeDuplicates.Select(x => new DuplicateReference(x.Reference, x.Count)).ToList();
+                var glDuplicateRows = glDuplicates.Select(x => new DuplicateReference(x.Reference, x.Count)).ToList();
+                _interchangeAudit = new(interchangeRows, glRows, Math.Abs(interchangeRows - glRows), interchangeDuplicateRows.Count, interchangeDuplicateRows.Sum(x => x.Count - 1), glDuplicateRows.Count, glDuplicateRows.Sum(x => x.Count - 1), interchangeDuplicateRows, glDuplicateRows);
+            }
+            else _interchangeAudit = null;
 
-        await ReloadMatches();
-        await LoadGlOnlySummaryAsync(db);
-        await LoadNetworkValidationAsync();
-        await LoadData();
+            if (!string.IsNullOrWhiteSpace(InitialFilter))
+            {
+                _matchFilter = InitialFilter.ToLowerInvariant();
+            }
+
+            await ReloadMatches();
+            await LoadGlOnlySummaryAsync(db);
+            await LoadNetworkValidationAsync();
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
     }
 
     // ---- data tab queries ----

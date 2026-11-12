@@ -66,7 +66,7 @@
         }).Where(r => r.Total > 0).ToList();
     }
 
-    private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}");
+    private void Open(int runId) => Nav.NavigateTo($"/recon/run/{runId}?filter=exception");
 
     private static string FunctionName(ReconFunction f) => f switch
     {

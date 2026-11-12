@@ -35,7 +35,10 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 // Platform adapters (generic multi-scheme). New schemes/CMS/CBS register here.
 builder.Services.AddSingleton<IAdapterRegistry>(sp => new AdapterRegistry(
-    [new BankOneDebitSettlementAdapter(), new BankOneInterchangeAdapter(), new BankOneNetworkT464Adapter(), new VisaDemoTransactionAdapter()],
+    [
+        new BankOneDebitSettlementAdapter(), new BankOneInterchangeAdapter(), new BankOneNetworkT464Adapter(),
+        new VisaDemoTransactionAdapter()
+    ],
     [new BankOneGlAdapter()]));
 builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IReconEngine, ReconEngine>();
@@ -65,7 +68,8 @@ QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 // Scoped DbContext for Identity + a factory for Blazor components/services.
 var configuredDatabaseConnection = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrWhiteSpace(configuredDatabaseConnection))
-    throw new InvalidOperationException($"ConnectionStrings:Default is missing in environment '{builder.Environment.EnvironmentName}'. Configure the server connection before starting ReconTool.");
+    throw new InvalidOperationException(
+        $"ConnectionStrings:Default is missing in environment '{builder.Environment.EnvironmentName}'. Configure the server connection before starting ReconTool.");
 var databaseConnection = new SqlConnectionStringBuilder(configuredDatabaseConnection);
 if (!databaseConnection.ShouldSerialize("Connect Timeout")) databaseConnection.ConnectTimeout = 30;
 builder.Services.AddDbContext<AppDbContext>((sp, options) =>
@@ -113,6 +117,7 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseAuthentication();
+app.UseStaticFiles();
 app.UseAuthorization();
 app.UseAntiforgery();
 
@@ -163,26 +168,29 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
     return Results.Redirect("/login");
 });
 
-app.MapPost("/auth/change-password", async (HttpContext http, UserManager<AppUser> userManager, SignInManager<AppUser> signInManager) =>
-{
-    var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
-    if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
+app.MapPost("/auth/change-password",
+    async (HttpContext http, UserManager<AppUser> userManager, SignInManager<AppUser> signInManager) =>
+    {
+        var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
 
-    var form = await http.Request.ReadFormAsync();
-    var currentPassword = form["currentPassword"].ToString();
-    var newPassword = form["newPassword"].ToString();
-    var confirmPassword = form["confirmPassword"].ToString();
-    if (string.IsNullOrWhiteSpace(currentPassword) || string.IsNullOrWhiteSpace(newPassword)) return Results.Redirect("/account/password?error=missing");
-    if (newPassword != confirmPassword) return Results.Redirect("/account/password?error=mismatch");
+        var form = await http.Request.ReadFormAsync();
+        var currentPassword = form["currentPassword"].ToString();
+        var newPassword = form["newPassword"].ToString();
+        var confirmPassword = form["confirmPassword"].ToString();
+        if (string.IsNullOrWhiteSpace(currentPassword) || string.IsNullOrWhiteSpace(newPassword))
+            return Results.Redirect("/account/password?error=missing");
+        if (newPassword != confirmPassword) return Results.Redirect("/account/password?error=mismatch");
 
-    var user = await userManager.FindByIdAsync(userId.ToString());
-    if (user is null || user.AuthProvider != AuthProvider.Local) return Results.Redirect("/account/password?error=provider");
-    var result = await userManager.ChangePasswordAsync(user, currentPassword, newPassword);
-    if (!result.Succeeded) return Results.Redirect("/account/password?error=invalid");
+        var user = await userManager.FindByIdAsync(userId.ToString());
+        if (user is null || user.AuthProvider != AuthProvider.Local)
+            return Results.Redirect("/account/password?error=provider");
+        var result = await userManager.ChangePasswordAsync(user, currentPassword, newPassword);
+        if (!result.Succeeded) return Results.Redirect("/account/password?error=invalid");
 
-    await signInManager.RefreshSignInAsync(user);
-    return Results.Redirect("/account/password?changed=1");
-}).RequireAuthorization();
+        await signInManager.RefreshSignInAsync(user);
+        return Results.Redirect("/account/password?changed=1");
+    }).RequireAuthorization();
 
 // Downloads the frozen run summary and its exception register as an analyst-ready workbook.
 app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
@@ -208,7 +216,8 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
         .ToListAsync(ct);
     var exceptions = await db.ReconExceptions.AsNoTracking()
         .Where(exception => exception.ReconRunId == runId)
-        .OrderBy(exception => exception.Status).ThenBy(exception => exception.ExceptionType).ThenBy(exception => exception.ReferenceNumber)
+        .OrderBy(exception => exception.Status).ThenBy(exception => exception.ExceptionType)
+        .ThenBy(exception => exception.ReferenceNumber)
         .ToListAsync(ct);
 
     using var workbook = new XLWorkbook();
@@ -226,11 +235,20 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
     summarySheet.Cell(3, 2).Value = run.PeriodKey;
     summarySheet.Cell(4, 1).Value = "Verification status";
     summarySheet.Cell(4, 2).Value = run.VerificationStatus.ToString();
-    summarySheet.Cell(6, 1).InsertData(new[] { new[] { "Leg", "Currency", "Matched count", "Matched amount", "Exception count", "Exception amount", "Average confidence" } });
+    summarySheet.Cell(6, 1).InsertData(new[]
+    {
+        new[]
+        {
+            "Leg", "Currency", "Matched count", "Matched amount", "Exception count", "Exception amount",
+            "Average confidence"
+        }
+    });
     var summaryRow = 7;
     foreach (var summary in summaries)
     {
-        summarySheet.Cell(summaryRow, 1).Value = summary.SettlementLeg == ReconSettlementLeg.DebitCardholder ? "Debit cardholder" : "Credit intermediary";
+        summarySheet.Cell(summaryRow, 1).Value = summary.SettlementLeg == ReconSettlementLeg.DebitCardholder
+            ? "Debit cardholder"
+            : "Credit intermediary";
         summarySheet.Cell(summaryRow, 2).Value = summary.Ccy == 0 ? "Other" : IsoCurrencyCatalog.Display(summary.Ccy);
         summarySheet.Cell(summaryRow, 3).Value = summary.MatchedCount;
         summarySheet.Cell(summaryRow, 4).Value = summary.MatchedAmount;
@@ -239,6 +257,7 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
         summarySheet.Cell(summaryRow, 7).Value = summary.AverageConfidence / 100m;
         summaryRow++;
     }
+
     summarySheet.Range(6, 1, 6, 7).Style.Font.Bold = true;
     summarySheet.Range(6, 1, Math.Max(6, summaryRow - 1), 7).CreateTable();
     summarySheet.Column(4).Style.NumberFormat.Format = "#,##0.00";
@@ -247,7 +266,14 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
     summarySheet.Columns().AdjustToContents();
 
     var exceptionSheet = workbook.AddWorksheet("Exceptions");
-    exceptionSheet.Cell(1, 1).InsertData(new[] { new[] { "Status", "Type", "Reference", "Processor account", "GL account", "Leg", "Currency", "Processor amount", "GL amount", "Difference", "Transaction date", "Confidence", "Narrative" } });
+    exceptionSheet.Cell(1, 1).InsertData(new[]
+    {
+        new[]
+        {
+            "Status", "Type", "Reference", "Processor account", "GL account", "Leg", "Currency", "Processor amount",
+            "GL amount", "Difference", "Transaction date", "Confidence", "Narrative"
+        }
+    });
     var exceptionRow = 2;
     foreach (var exception in exceptions)
     {
@@ -257,15 +283,18 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
         exceptionSheet.Cell(exceptionRow, 4).Value = exception.ProcessorAccountNumber ?? "";
         exceptionSheet.Cell(exceptionRow, 5).Value = exception.GlAccountNumber ?? "";
         exceptionSheet.Cell(exceptionRow, 6).Value = exception.SettlementLeg?.ToString() ?? "";
-        exceptionSheet.Cell(exceptionRow, 7).Value = exception.Ccy is { } currency ? IsoCurrencyCatalog.Display(currency) : "";
+        exceptionSheet.Cell(exceptionRow, 7).Value =
+            exception.Ccy is { } currency ? IsoCurrencyCatalog.Display(currency) : "";
         exceptionSheet.Cell(exceptionRow, 8).Value = exception.ActualAmount;
         exceptionSheet.Cell(exceptionRow, 9).Value = exception.ExpectedAmount;
         exceptionSheet.Cell(exceptionRow, 10).Value = exception.Difference;
-        exceptionSheet.Cell(exceptionRow, 11).Value = exception.TxnDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
+        exceptionSheet.Cell(exceptionRow, 11).Value =
+            exception.TxnDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
         exceptionSheet.Cell(exceptionRow, 12).Value = exception.Confidence / 100m;
         exceptionSheet.Cell(exceptionRow, 13).Value = exception.Narrative;
         exceptionRow++;
     }
+
     exceptionSheet.Range(1, 1, 1, 13).Style.Font.Bold = true;
     exceptionSheet.Range(1, 1, Math.Max(1, exceptionRow - 1), 13).CreateTable();
     exceptionSheet.Columns(8, 10).Style.NumberFormat.Format = "#,##0.00";
@@ -275,14 +304,17 @@ app.MapGet("/api/recon/{runId:int}/summary.xlsx", async (
 
     await using var stream = new MemoryStream();
     workbook.SaveAs(stream);
-    return Results.File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"reconciliation-{runId}-summary.xlsx");
+    return Results.File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        $"reconciliation-{runId}-summary.xlsx");
 }).RequireAuthorization();
 
 // Downloads every row selected by the Match results filters (not merely the current page).
 app.MapGet("/api/recon/{runId:int}/matches.csv", async (
-    int runId, string? result, string? reference, string? microfilm, string? glParticular2, string? processorAccount, string? glAccount,
+    int runId, string? result, string? reference, string? microfilm, string? glParticular2, string? processorAccount,
+    string? glAccount,
     string? search, string? cardType, string? merchant, string? processorDescription,
-    int? txnCcy, int? billingCcy, int? settlementCcy, int? reconCcy, bool? otherReconCcy, byte? leg, int? glCcy, decimal? maxDifference,
+    int? txnCcy, int? billingCcy, int? settlementCcy, int? reconCcy, bool? otherReconCcy, byte? leg, int? glCcy,
+    decimal? maxDifference,
     DateOnly? processorDate, DateOnly? glDate, DateOnly? glPostingDate,
     string? sort, string? sortDescending,
     HttpContext http, IPermissionService permissions, AppDbContext db, CancellationToken ct) =>
@@ -321,21 +353,35 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
         _ => query
     };
     if (!string.IsNullOrWhiteSpace(search))
-        query = query.Where(m => (m.ReferenceNumber != null && m.ReferenceNumber.Contains(search)) || (m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(search)));
-    if (!string.IsNullOrWhiteSpace(reference)) query = query.Where(m => m.ReferenceNumber != null && m.ReferenceNumber.Contains(reference));
-    if (!string.IsNullOrWhiteSpace(microfilm)) query = query.Where(m => m.MicrofilmRefNumber != null && m.MicrofilmRefNumber.Contains(microfilm));
-    if (!string.IsNullOrWhiteSpace(glParticular2)) query = query.Where(m => m.GlParticular2 != null && m.GlParticular2.Contains(glParticular2));
-    if (!string.IsNullOrWhiteSpace(processorAccount)) query = query.Where(m => m.ProcessorAccountNumber != null && m.ProcessorAccountNumber.Contains(processorAccount));
-    if (string.Equals(cardType, "blank", StringComparison.OrdinalIgnoreCase)) query = query.Where(m => m.ProcessorProductType == null || m.ProcessorProductType == "");
-    else if (!string.IsNullOrWhiteSpace(cardType)) query = query.Where(m => m.ProcessorProductType != null && m.ProcessorProductType == cardType);
-    if (!string.IsNullOrWhiteSpace(merchant)) query = query.Where(m => m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(merchant));
-    if (string.Equals(processorDescription, "blank", StringComparison.OrdinalIgnoreCase)) query = query.Where(m => m.ProcessorDescription == null || m.ProcessorDescription == "");
-    else if (!string.IsNullOrWhiteSpace(processorDescription)) query = query.Where(m => m.ProcessorDescription == processorDescription);
-    if (!string.IsNullOrWhiteSpace(glAccount)) query = query.Where(m => m.GlAccountNumber != null && m.GlAccountNumber.Contains(glAccount));
+        query = query.Where(m =>
+            (m.ReferenceNumber != null && m.ReferenceNumber.Contains(search)) ||
+            (m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(search)));
+    if (!string.IsNullOrWhiteSpace(reference))
+        query = query.Where(m => m.ReferenceNumber != null && m.ReferenceNumber.Contains(reference));
+    if (!string.IsNullOrWhiteSpace(microfilm))
+        query = query.Where(m => m.MicrofilmRefNumber != null && m.MicrofilmRefNumber.Contains(microfilm));
+    if (!string.IsNullOrWhiteSpace(glParticular2))
+        query = query.Where(m => m.GlParticular2 != null && m.GlParticular2.Contains(glParticular2));
+    if (!string.IsNullOrWhiteSpace(processorAccount))
+        query =
+            query.Where(m => m.ProcessorAccountNumber != null && m.ProcessorAccountNumber.Contains(processorAccount));
+    if (string.Equals(cardType, "blank", StringComparison.OrdinalIgnoreCase))
+        query = query.Where(m => m.ProcessorProductType == null || m.ProcessorProductType == "");
+    else if (!string.IsNullOrWhiteSpace(cardType))
+        query = query.Where(m => m.ProcessorProductType != null && m.ProcessorProductType == cardType);
+    if (!string.IsNullOrWhiteSpace(merchant))
+        query = query.Where(m => m.ProcessorMerchant != null && m.ProcessorMerchant.Contains(merchant));
+    if (string.Equals(processorDescription, "blank", StringComparison.OrdinalIgnoreCase))
+        query = query.Where(m => m.ProcessorDescription == null || m.ProcessorDescription == "");
+    else if (!string.IsNullOrWhiteSpace(processorDescription))
+        query = query.Where(m => m.ProcessorDescription == processorDescription);
+    if (!string.IsNullOrWhiteSpace(glAccount))
+        query = query.Where(m => m.GlAccountNumber != null && m.GlAccountNumber.Contains(glAccount));
     if (txnCcy.HasValue) query = query.Where(m => m.ProcessorCcy == txnCcy);
     if (billingCcy.HasValue) query = query.Where(m => m.BillingCcy == billingCcy);
     if (settlementCcy.HasValue) query = query.Where(m => m.SettlementCcy == settlementCcy);
-    if (otherReconCcy == true) query = query.Where(m => m.Ccy == null || (m.Ccy != 480 && m.Ccy != 840 && m.Ccy != 978));
+    if (otherReconCcy == true)
+        query = query.Where(m => m.Ccy == null || (m.Ccy != 480 && m.Ccy != 840 && m.Ccy != 978));
     else if (reconCcy.HasValue) query = query.Where(m => m.Ccy == reconCcy);
     if (leg.HasValue) query = query.Where(m => (byte)m.SettlementLeg == leg.Value);
     if (glCcy.HasValue) query = query.Where(m => (m.GlCcy ?? 480) == glCcy);
@@ -343,8 +389,11 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
     {
         var dayStart = processorDate.Value.ToDateTime(TimeOnly.MinValue);
         var dayEnd = dayStart.AddDays(1);
-        query = query.Where(m => (m.ProcessorTransactionDateTime != null && m.ProcessorTransactionDateTime >= dayStart && m.ProcessorTransactionDateTime < dayEnd) || m.ProcessorDate == processorDate);
+        query = query.Where(m =>
+            (m.ProcessorTransactionDateTime != null && m.ProcessorTransactionDateTime >= dayStart &&
+             m.ProcessorTransactionDateTime < dayEnd) || m.ProcessorDate == processorDate);
     }
+
     if (glDate.HasValue) query = query.Where(m => m.GlDate == glDate);
     if (glPostingDate.HasValue)
     {
@@ -352,42 +401,68 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
         var dayEnd = dayStart.AddDays(1);
         query = query.Where(m => m.GlPostingDateTime >= dayStart && m.GlPostingDateTime < dayEnd);
     }
-    if (maxDifference.HasValue) query = query.Where(m => m.ReconciliationAmount != null && m.GlAmount != null && Math.Abs(m.ReconciliationAmount.Value - m.GlAmount.Value) <= maxDifference);
+
+    if (maxDifference.HasValue)
+        query = query.Where(m =>
+            m.ReconciliationAmount != null && m.GlAmount != null &&
+            Math.Abs(m.ReconciliationAmount.Value - m.GlAmount.Value) <= maxDifference);
 
     query = (sort ?? "date").ToLowerInvariant() switch
     {
-        "date" when descending => query.OrderByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ProcessorDate).ThenByDescending(m => m.ReconMatchId),
-        "date" => query.OrderBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ProcessorDate).ThenBy(m => m.ReconMatchId),
-        "gl_date" when descending => query.OrderByDescending(m => m.GlDate).ThenByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.ReconMatchId),
+        "date" when descending => query.OrderByDescending(m => m.ProcessorTransactionDateTime)
+            .ThenByDescending(m => m.ProcessorDate).ThenByDescending(m => m.ReconMatchId),
+        "date" => query.OrderBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ProcessorDate)
+            .ThenBy(m => m.ReconMatchId),
+        "gl_date" when descending => query.OrderByDescending(m => m.GlDate).ThenByDescending(m => m.GlPostingDateTime)
+            .ThenByDescending(m => m.ReconMatchId),
         "gl_date" => query.OrderBy(m => m.GlDate).ThenBy(m => m.GlPostingDateTime).ThenBy(m => m.ReconMatchId),
-        "gl_posting" when descending => query.OrderByDescending(m => m.GlPostingDateTime).ThenByDescending(m => m.GlDate).ThenByDescending(m => m.ReconMatchId),
+        "gl_posting" when descending => query.OrderByDescending(m => m.GlPostingDateTime)
+            .ThenByDescending(m => m.GlDate).ThenByDescending(m => m.ReconMatchId),
         "gl_posting" => query.OrderBy(m => m.GlPostingDateTime).ThenBy(m => m.GlDate).ThenBy(m => m.ReconMatchId),
-        "confidence" when descending => query.OrderByDescending(m => m.Confidence).ThenByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ReconMatchId),
-        "confidence" => query.OrderBy(m => m.Confidence).ThenBy(m => m.ProcessorTransactionDateTime).ThenBy(m => m.ReconMatchId),
+        "confidence" when descending => query.OrderByDescending(m => m.Confidence)
+            .ThenByDescending(m => m.ProcessorTransactionDateTime).ThenByDescending(m => m.ReconMatchId),
+        "confidence" => query.OrderBy(m => m.Confidence).ThenBy(m => m.ProcessorTransactionDateTime)
+            .ThenBy(m => m.ReconMatchId),
         _ => query.OrderByDescending(m => m.ReconMatchId)
     };
 
     var matches = await query.ToListAsync(ct);
-    var csv = new StringBuilder("\uFEFFResult,Reference,Transaction Date Time,Processor Account,Card Type,Merchant,Processor Description,GL Account,GL Reference,GL Description,Transaction Amount,Transaction Currency,Billing Amount,Billing Currency,Settlement Amount,Settlement Currency,Reconciliation Amount,Reconciliation Currency,GL Transaction Date,GL Posting Date Time,GL Amount,GL Currency,Difference,Match Comment,Confidence,Score Breakdown\r\n");
+    var csv = new StringBuilder(
+        "\uFEFFResult,Reference,Transaction Date Time,Processor Account,Card Type,Merchant,Processor Description,GL Account,GL Reference,GL Description,Transaction Amount,Transaction Currency,Billing Amount,Billing Currency,Settlement Amount,Settlement Currency,Reconciliation Amount,Reconciliation Currency,GL Transaction Date,GL Posting Date Time,GL Amount,GL Currency,Difference,Match Comment,Confidence,Score Breakdown\r\n");
     foreach (var m in matches)
     {
         var fields = new (string? Value, bool ProtectForExcel)[]
         {
-            (ResultName(m.MatchStatus), true), (m.ReferenceNumber, true), (DateTimeValue(m.ProcessorTransactionDateTime, m.ProcessorDate), false), (m.ProcessorAccountNumber, true), (m.ProcessorProductType, true), (m.ProcessorMerchant, true), (m.ProcessorDescription, true), (m.GlAccountNumber, true), (m.GlReference, true), (m.GlDescription, true),
-            (Amount(m.ProcessorAmount), false), (Currency(m.ProcessorCcy), true), (Amount(m.BillingAmount), false), (Currency(m.BillingCcy), true),
-            (Amount(m.SettlementAmount), false), (Currency(m.SettlementCcy), true), (Amount(m.ReconciliationAmount), false), (Currency(m.Ccy), true),
-            (DateOnlyValue(m.GlDate), false), (DateTimeValue(m.GlPostingDateTime, null), false), (Amount(m.GlAmount), false), (Currency(m.GlCcy ?? 480), true), (Amount(m.ReconciliationAmount is { } p && m.GlAmount is { } g ? Math.Abs(p - g) : null), false), (m.MatchComment, true), (m.Confidence.ToString("0.0", CultureInfo.InvariantCulture), false), (m.ScoreBreakdown, true)
+            (ResultName(m.MatchStatus), true), (m.ReferenceNumber, true),
+            (DateTimeValue(m.ProcessorTransactionDateTime, m.ProcessorDate), false), (m.ProcessorAccountNumber, true),
+            (m.ProcessorProductType, true), (m.ProcessorMerchant, true), (m.ProcessorDescription, true),
+            (m.GlAccountNumber, true), (m.GlReference, true), (m.GlDescription, true),
+            (Amount(m.ProcessorAmount), false), (Currency(m.ProcessorCcy), true), (Amount(m.BillingAmount), false),
+            (Currency(m.BillingCcy), true),
+            (Amount(m.SettlementAmount), false), (Currency(m.SettlementCcy), true),
+            (Amount(m.ReconciliationAmount), false), (Currency(m.Ccy), true),
+            (DateOnlyValue(m.GlDate), false), (DateTimeValue(m.GlPostingDateTime, null), false),
+            (Amount(m.GlAmount), false), (Currency(m.GlCcy ?? 480), true),
+            (Amount(m.ReconciliationAmount is { } p && m.GlAmount is { } g ? Math.Abs(p - g) : null), false),
+            (m.MatchComment, true), (m.Confidence.ToString("0.0", CultureInfo.InvariantCulture), false),
+            (m.ScoreBreakdown, true)
         };
         csv.AppendLine(string.Join(',', fields.Select(field => Csv(field.Value, field.ProtectForExcel))));
     }
-    return Results.File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv; charset=utf-8", $"reconciliation-{runId}-{result ?? "all"}.csv");
+
+    return Results.File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv; charset=utf-8",
+        $"reconciliation-{runId}-{result ?? "all"}.csv");
 
     static string Amount(decimal? value) => value?.ToString("0.00", CultureInfo.InvariantCulture) ?? "";
+
     static string DateTimeValue(DateTime? timestamp, DateOnly? fallbackDate) => timestamp.HasValue
-        ? timestamp.Value.ToString(timestamp.Value.TimeOfDay == TimeSpan.Zero ? "yyyy-MM-dd" : "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+        ? timestamp.Value.ToString(timestamp.Value.TimeOfDay == TimeSpan.Zero ? "yyyy-MM-dd" : "yyyy-MM-dd HH:mm",
+            CultureInfo.InvariantCulture)
         : fallbackDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
+
     static string DateOnlyValue(DateOnly? date) => date?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
     static string Currency(int? code) => code is null ? "" : IsoCurrencyCatalog.Display(code);
+
     static string Csv(string? value, bool protectForExcel)
     {
         value ??= "";
@@ -395,6 +470,7 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
             value = "'" + value;
         return $"\"{value.Replace("\"", "\"\"")}\"";
     }
+
     static string ResultName(MatchStatus status) => status switch
     {
         MatchStatus.Matched => "Matched",
@@ -405,6 +481,138 @@ app.MapGet("/api/recon/{runId:int}/matches.csv", async (
         MatchStatus.Duplicate => "Duplicate",
         _ => status.ToString()
     };
+}).RequireAuthorization();
+
+// Consolidated Exceptions Report exports (.xlsx and .csv)
+app.MapGet("/api/reports/batch-exceptions.xlsx", async (
+    string? batchIds, int? function, int? status, int? type, int? ccy, DateOnly? from, DateOnly? to, string? search,
+    HttpContext http, IPermissionService permissions, AppDbContext db, CancellationToken ct) =>
+{
+    var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
+    if (!await permissions.CanViewAsync(userId, "EXCEPTIONS")) return Results.Forbid();
+
+    var query = db.ReconExceptions.AsNoTracking().Include(e => e.ReconRun).AsQueryable();
+    if (!string.IsNullOrWhiteSpace(batchIds))
+    {
+        var ids = batchIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var id) ? id : 0).Where(id => id > 0).ToList();
+        if (ids.Count > 0) query = query.Where(e => ids.Contains(e.ReconRunId));
+    }
+    else
+    {
+        query = query.Where(e => e.ReconRun.AnalysisOfRunId == null);
+    }
+
+    if (function.HasValue) query = query.Where(e => (int)e.ReconRun.Function == function.Value);
+    if (status.HasValue) query = query.Where(e => (int)e.Status == status.Value);
+    if (type.HasValue) query = query.Where(e => (int)e.ExceptionType == type.Value);
+    if (ccy.HasValue) query = query.Where(e => e.Ccy == ccy.Value);
+    if (from.HasValue) query = query.Where(e => e.TxnDate >= from.Value);
+    if (to.HasValue) query = query.Where(e => e.TxnDate <= to.Value);
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var s = search.Trim();
+        query = query.Where(e => (e.ReferenceNumber != null && e.ReferenceNumber.Contains(s)) ||
+                                 (e.ProcessorAccountNumber != null && e.ProcessorAccountNumber.Contains(s)) ||
+                                 (e.GlAccountNumber != null && e.GlAccountNumber.Contains(s)));
+    }
+
+    var list = await query.OrderByDescending(e => e.ReconRunId).ThenBy(e => e.ReconExceptionId).ToListAsync(ct);
+
+    using var workbook = new ClosedXML.Excel.XLWorkbook();
+    var sheet = workbook.AddWorksheet("Consolidated Exceptions");
+    sheet.Cell(1, 1).InsertData(new[]
+    {
+        new[] { "Batch #", "Function", "Status", "Type", "Reference", "Processor Account", "GL Account", "Actual Amount", "Expected Amount", "Difference", "Ccy", "Date", "Narrative" }
+    });
+
+    var row = 2;
+    foreach (var e in list)
+    {
+        sheet.Cell(row, 1).Value = e.ReconRunId;
+        sheet.Cell(row, 2).Value = e.ReconRun?.Function.ToString() ?? "";
+        sheet.Cell(row, 3).Value = e.Status.ToString();
+        sheet.Cell(row, 4).Value = e.ExceptionType.ToString();
+        sheet.Cell(row, 5).Value = e.ReferenceNumber ?? "";
+        sheet.Cell(row, 6).Value = e.ProcessorAccountNumber ?? "";
+        sheet.Cell(row, 7).Value = e.GlAccountNumber ?? "";
+        sheet.Cell(row, 8).Value = e.ActualAmount;
+        sheet.Cell(row, 9).Value = e.ExpectedAmount;
+        sheet.Cell(row, 10).Value = e.Difference;
+        sheet.Cell(row, 11).Value = e.Ccy is { } c ? IsoCurrencyCatalog.Display(c) : "";
+        sheet.Cell(row, 12).Value = e.TxnDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
+        sheet.Cell(row, 13).Value = e.Narrative;
+        row++;
+    }
+
+    sheet.Range(1, 1, 1, 13).Style.Font.Bold = true;
+    sheet.Range(1, 1, Math.Max(1, row - 1), 13).CreateTable();
+    sheet.Columns(8, 10).Style.NumberFormat.Format = "#,##0.00";
+    sheet.Columns().AdjustToContents();
+
+    await using var ms = new MemoryStream();
+    workbook.SaveAs(ms);
+    return Results.File(ms.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "batch-exceptions-report.xlsx");
+}).RequireAuthorization();
+
+app.MapGet("/api/reports/batch-exceptions.csv", async (
+    string? batchIds, int? function, int? status, int? type, int? ccy, DateOnly? from, DateOnly? to, string? search,
+    HttpContext http, IPermissionService permissions, AppDbContext db, CancellationToken ct) =>
+{
+    var userIdValue = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (!Guid.TryParse(userIdValue, out var userId)) return Results.Forbid();
+    if (!await permissions.CanViewAsync(userId, "EXCEPTIONS")) return Results.Forbid();
+
+    var query = db.ReconExceptions.AsNoTracking().Include(e => e.ReconRun).AsQueryable();
+    if (!string.IsNullOrWhiteSpace(batchIds))
+    {
+        var ids = batchIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var id) ? id : 0).Where(id => id > 0).ToList();
+        if (ids.Count > 0) query = query.Where(e => ids.Contains(e.ReconRunId));
+    }
+    else
+    {
+        query = query.Where(e => e.ReconRun.AnalysisOfRunId == null);
+    }
+
+    if (function.HasValue) query = query.Where(e => (int)e.ReconRun.Function == function.Value);
+    if (status.HasValue) query = query.Where(e => (int)e.Status == status.Value);
+    if (type.HasValue) query = query.Where(e => (int)e.ExceptionType == type.Value);
+    if (ccy.HasValue) query = query.Where(e => e.Ccy == ccy.Value);
+    if (from.HasValue) query = query.Where(e => e.TxnDate >= from.Value);
+    if (to.HasValue) query = query.Where(e => e.TxnDate <= to.Value);
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var s = search.Trim();
+        query = query.Where(e => (e.ReferenceNumber != null && e.ReferenceNumber.Contains(s)) ||
+                                 (e.ProcessorAccountNumber != null && e.ProcessorAccountNumber.Contains(s)) ||
+                                 (e.GlAccountNumber != null && e.GlAccountNumber.Contains(s)));
+    }
+
+    var list = await query.OrderByDescending(e => e.ReconRunId).ThenBy(e => e.ReconExceptionId).ToListAsync(ct);
+    var csv = new StringBuilder("\uFEFFBatch #,Function,Status,Type,Reference,Processor Account,GL Account,Actual Amount,Expected Amount,Difference,Currency,Date,Narrative\r\n");
+    foreach (var e in list)
+    {
+        string SafeCsv(string? v) => $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
+        csv.AppendLine(string.Join(',',
+            e.ReconRunId,
+            SafeCsv(e.ReconRun?.Function.ToString()),
+            SafeCsv(e.Status.ToString()),
+            SafeCsv(e.ExceptionType.ToString()),
+            SafeCsv(e.ReferenceNumber),
+            SafeCsv(e.ProcessorAccountNumber),
+            SafeCsv(e.GlAccountNumber),
+            e.ActualAmount?.ToString("0.00", CultureInfo.InvariantCulture) ?? "",
+            e.ExpectedAmount?.ToString("0.00", CultureInfo.InvariantCulture) ?? "",
+            e.Difference?.ToString("0.00", CultureInfo.InvariantCulture) ?? "",
+            SafeCsv(e.Ccy is { } c ? IsoCurrencyCatalog.Display(c) : ""),
+            SafeCsv(e.TxnDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            SafeCsv(e.Narrative)
+        ));
+    }
+
+    return Results.File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv; charset=utf-8", "batch-exceptions-report.csv");
 }).RequireAuthorization();
 
 app.MapStaticAssets();
@@ -429,6 +637,7 @@ using (var scope = app.Services.CreateScope())
     }, app.Logger);
     db.Database.Migrate();
 }
+
 await DbSeeder.SeedAsync(app.Services);
 
 app.Run();

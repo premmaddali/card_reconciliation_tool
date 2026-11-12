@@ -200,7 +200,8 @@ public static class DbSeeder
             ("DAILYRECON", "Daily / period recon", "/recon/daily", "RECON", 4, "bulk"),
             ("NETATMRECON", "Network ↔ ATM recon", "/recon/network-atm", "RECON", 5, "atm"),
             ("EXCEPTIONS", "Exceptions",       "/exceptions",  "RECON",    6, "alert"),
-            ("ANALYSIS",   "Advanced analysis", "/analysis",    "RECON",    7, "analysis"),
+            ("BATCHREPORTS", "Batch reports",  "/reports/batch-exceptions", "RECON", 7, "list"),
+            ("ANALYSIS",   "Advanced analysis", "/analysis",    "RECON",    8, "analysis"),
             ("DATA",       "Data",             null,           null,       7, null),
             ("IMPORT",     "Import files",     "/import",      "DATA",     1, "import"),
             ("BATCHES",    "Import batches",   "/batches",     "DATA",     2, "list"),
@@ -271,6 +272,7 @@ public static class DbSeeder
             ("Recon Officer", "DAILYRECON", true, true,  false, false),
             ("Recon Officer", "NETATMRECON", true, true,  false, false),
             ("Recon Officer", "EXCEPTIONS", true, false, true,  false),
+            ("Recon Officer", "BATCHREPORTS", true, false, false, false),
             ("Recon Officer", "ANALYSIS",   true, false, false, false),
             ("Recon Officer", "IMPORT",     true, true,  false, false),
             ("Recon Officer", "BATCHES",    true, false, false, false),
@@ -284,6 +286,7 @@ public static class DbSeeder
             ("Recon Manager", "DAILYRECON", true, true,  true,  false),
             ("Recon Manager", "NETATMRECON", true, true,  true,  false),
             ("Recon Manager", "EXCEPTIONS", true, true,  true,  true),
+            ("Recon Manager", "BATCHREPORTS", true, false, false, false),
             ("Recon Manager", "ANALYSIS",   true, false, false, false),
             ("Recon Manager", "IMPORT",     true, true,  false, false),
             ("Recon Manager", "BATCHES",    true, false, false, false),
@@ -294,6 +297,7 @@ public static class DbSeeder
             ("Viewer",        "SCHEMES",    true, false, false, false),
             ("Viewer",        "NETATMRECON", true, false, false, false),
             ("Viewer",        "EXCEPTIONS", true, false, false, false),
+            ("Viewer",        "BATCHREPORTS", true, false, false, false),
             ("Viewer",        "ANALYSIS",   true, false, false, false),
         };
         foreach (var (roleName, pageCode, v, a, e, d) in grants)

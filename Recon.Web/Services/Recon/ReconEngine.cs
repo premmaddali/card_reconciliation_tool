@@ -153,6 +153,9 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
             var effectiveAmountTolerance = run.AmountTolerance ?? _w.AmountTolerance;
             var (matches, exceptions) = await MatchAsync(run.ReconRunId, function, proc, gl, effectiveAmountTolerance, progress, beforeAmbiguousPass, ct);
 
+            // Phase 2: Carry forward manual resolutions and comments from prior runs of this batch/period
+            await CarryForwardResolutionsAsync(db, run, exceptions, ct);
+
             db.ChangeTracker.AutoDetectChangesEnabled = false;
             db.ReconMatches.AddRange(matches);
             db.ReconExceptions.AddRange(exceptions);
@@ -902,5 +905,76 @@ public class ReconEngine(IDbContextFactory<AppDbContext> dbFactory, IOptions<Mat
         var second = CardIdentity.Display(remarks)?.Trim();
         if (string.IsNullOrEmpty(first)) return string.IsNullOrEmpty(second) ? null : second;
         return string.IsNullOrEmpty(second) || string.Equals(first, second, StringComparison.OrdinalIgnoreCase) ? first : $"{first} · {second}";
+    }
+
+    private static async Task CarryForwardResolutionsAsync(
+        AppDbContext db,
+        ReconRun run,
+        List<ReconException> exceptions,
+        CancellationToken ct)
+    {
+        if (exceptions.Count == 0) return;
+
+        // Find prior runs with the same processor or GL batch, or prior analyses of the same run
+        var priorRunIds = await db.ReconRuns.AsNoTracking()
+            .Where(r => r.ReconRunId != run.ReconRunId && (
+                r.ProcessorBatchId == run.ProcessorBatchId ||
+                (run.GlBatchId != null && r.GlBatchId == run.GlBatchId) ||
+                (run.AnalysisOfRunId != null && (r.ReconRunId == run.AnalysisOfRunId || r.AnalysisOfRunId == run.AnalysisOfRunId))
+            ))
+            .Select(r => r.ReconRunId)
+            .ToListAsync(ct);
+
+        if (priorRunIds.Count == 0) return;
+
+        var priorExceptions = await db.ReconExceptions.AsNoTracking()
+            .Where(e => priorRunIds.Contains(e.ReconRunId) && e.Status != ExceptionStatus.Open)
+            .Include(e => e.Comments)
+            .ToListAsync(ct);
+
+        if (priorExceptions.Count == 0) return;
+
+        var byProcStaging = priorExceptions
+            .Where(e => e.ProcessorStagingId != null)
+            .GroupBy(e => e.ProcessorStagingId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.ReconExceptionId).First());
+
+        var byGlStaging = priorExceptions
+            .Where(e => e.GlStagingId != null)
+            .GroupBy(e => e.GlStagingId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.ReconExceptionId).First());
+
+        foreach (var ex in exceptions)
+        {
+            ReconException? prior = null;
+            if (ex.ProcessorStagingId != null && byProcStaging.TryGetValue(ex.ProcessorStagingId.Value, out var p))
+            {
+                prior = p;
+            }
+            else if (ex.GlStagingId != null && byGlStaging.TryGetValue(ex.GlStagingId.Value, out var g))
+            {
+                prior = g;
+            }
+
+            if (prior != null)
+            {
+                ex.Status = prior.Status;
+                ex.ResolvedBy = prior.ResolvedBy;
+                ex.ResolvedDate = prior.ResolvedDate;
+                if (!string.IsNullOrWhiteSpace(prior.Narrative) && prior.Narrative != ex.Narrative)
+                {
+                    ex.Narrative = $"{ex.Narrative} [Prior resolution: {prior.Status}]";
+                }
+                foreach (var c in prior.Comments)
+                {
+                    ex.Comments.Add(new ReconExceptionComment
+                    {
+                        Body = c.Body,
+                        CreatedBy = c.CreatedBy,
+                        CreatedDate = c.CreatedDate
+                    });
+                }
+            }
+        }
     }
 }
