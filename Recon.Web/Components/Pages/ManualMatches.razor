@@ -1,0 +1,177 @@
+@page "/reports/manual-matches"
+@inject IDbContextFactory<Recon.Web.Data.AppDbContext> DbFactory
+@inject Recon.Web.Services.IPermissionService Permissions
+@inject Recon.Web.Services.ICurrentUserService CurrentUser
+@inject ILogger<ManualMatches> Logger
+@using Microsoft.EntityFrameworkCore
+@using Recon.Web.Domain.Import
+@using Recon.Web.Domain.Recon
+@using Recon.Web.Domain.Reference
+
+<PageTitle>Manual matches · Recon Tool</PageTitle>
+<PageHeader Title="Manual matches" Subtitle="Manual matching counts by batch, with transaction-level drilldown" Eyebrow="Reconciliation" Icon="batches" />
+
+@if (!_ready)
+{
+    <p role="status" class="text-sm text-gray-500">Loading report…</p>
+}
+else if (!_allowed)
+{
+    <p role="alert" class="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">You do not have permission to view this report.</p>
+}
+else
+{
+    <form @onsubmit="ApplyFilters" @onsubmit:preventDefault class="mb-5 flex flex-wrap items-end gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+        <div class="min-w-48 flex-1"><label for="manual-search" class="@LabelClass">Batch ID or period</label><input id="manual-search" @bind="_search" placeholder="e.g. #84 or 2023-04" class="@InputClass w-full" /></div>
+        <div><label for="manual-function" class="@LabelClass">Function</label><select id="manual-function" @bind="_function" class="@InputClass"><option value="">All functions</option>@foreach (var f in Enum.GetValues<ReconFunction>()) { <option value="@((int)f)">@FunctionLabel(f)</option> }</select></div>
+        <div><label for="manual-from" class="@LabelClass">Matched from (UTC)</label><input id="manual-from" type="date" @bind="_from" class="@InputClass" /></div>
+        <div><label for="manual-to" class="@LabelClass">Matched to (UTC)</label><input id="manual-to" type="date" @bind="_to" class="@InputClass" /></div>
+        <div><label for="manual-scope" class="@LabelClass">Run scope</label><select id="manual-scope" @bind="_scope" class="@InputClass"><option value="operational">Operational batches</option><option value="analysis">Analysis runs</option><option value="all">All runs</option></select></div>
+        <button type="submit" disabled="@_loading" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Apply</button>
+        <button type="button" @onclick="ResetFilters" disabled="@_loading" class="@InputClass">Reset</button>
+    </form>
+    @if (_error is not null) { <p role="alert" class="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-800">@_error</p> }
+    <div class="mb-5 flex flex-wrap gap-5 text-sm text-gray-600 dark:text-gray-300" role="status">
+        <span><strong class="text-lg text-gray-900 dark:text-white">@_manualTotal.ToString("N0")</strong> manually matched transactions</span>
+        <span><strong>@_batchesWithManual.ToString("N0")</strong> batches with manual matches</span>
+        <span>@_batchTotal.ToString("N0") batches in scope · includes archived batches</span>
+    </div>
+    @if (_loading) { <p role="status" class="mb-3 text-sm text-gray-500">Updating report…</p> }
+
+    @if (_detailBatch is null)
+    {
+        <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-700"><tr><th class="px-5 py-3">Batch</th><th class="px-5 py-3">Period</th><th class="px-5 py-3">Function</th><th class="px-5 py-3 text-right">Manually matched</th><th class="px-5 py-3">Last manual match (UTC)</th><th class="px-5 py-3">State</th></tr></thead>
+                    <tbody class="divide-y divide-gray-100 text-gray-700 dark:divide-gray-700 dark:text-gray-200">
+                        @if (_batches.Count == 0 && !_loading) { <tr><td colspan="6" class="px-5 py-10 text-center text-gray-500">No batches match these filters.</td></tr> }
+                        @foreach (var b in _batches)
+                        {
+                            <tr @key="b.RunId"><td class="px-5 py-3"><a href="@($"/recon/run/{b.RunId}")" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">#@b.RunId</a></td><td class="px-5 py-3">@b.Period</td><td class="px-5 py-3">@FunctionLabel(b.Function)</td>
+                                <td class="px-5 py-3 text-right tabular-nums">
+                                    <button type="button" disabled="@_loading" @onclick="() => OpenDetails(b)" aria-label="@($"View {b.Count} manual matches for batch {b.RunId}")" class="font-bold text-primary-700 underline underline-offset-4 dark:text-primary-300">@b.Count.ToString("N0")</button>
+                                </td>
+                                <td class="px-5 py-3">@(b.LastMatched?.ToString("dd MMM yyyy HH:mm") ?? "—")</td><td class="px-5 py-3">@(b.Analysis ? "Analysis" : b.Archived ? "Archived" : "Operational")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="@PagerClass"><span>Page @(_batchPage + 1) of @BatchPages · @_batchTotal.ToString("N0") batches</span><div class="flex gap-2"><button type="button" @onclick="PreviousBatchPage" disabled="@(_loading || _batchPage == 0)" class="@InputClass disabled:opacity-40">Previous</button><button type="button" @onclick="NextBatchPage" disabled="@(_loading || _batchPage + 1 >= BatchPages)" class="@InputClass disabled:opacity-40">Next</button></div></div>
+        </div>
+        <p class="mt-3 text-xs text-gray-500">Select a count to see its transactions. Automatic matches and exceptions only marked resolved are excluded.</p>
+    }
+    else
+    {
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div><h2 class="text-base font-semibold text-gray-900 dark:text-white">Manual matches · batch #@_detailBatch.RunId</h2><p class="text-xs text-gray-500">@_detailBatch.Period · @FunctionLabel(_detailBatch.Function) · @_detailTotal.ToString("N0") transactions</p></div>
+            <div class="flex gap-3"><a href="@($"/recon/run/{_detailBatch.RunId}")" class="@InputClass">Open original batch</a><button type="button" @onclick="BackToCounts" disabled="@_loading" class="@InputClass">Back to batch counts</button></div>
+        </div>
+        <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                    <thead class="border-b border-gray-200 uppercase text-gray-500 dark:border-gray-700"><tr><th class="px-4 py-3">Match ID</th><th class="px-4 py-3">Reference / microfilm</th><th class="px-4 py-3">Merchant / account</th><th class="px-4 py-3">Matched at (UTC)</th><th class="px-4 py-3 text-right">Recon amount</th><th class="px-4 py-3 text-right">GL amount</th><th class="px-4 py-3">GL account</th><th class="px-4 py-3">Reason</th></tr></thead>
+                    <tbody class="divide-y divide-gray-100 text-gray-700 dark:divide-gray-700 dark:text-gray-200">
+                        @if (_details.Count == 0 && !_loading) { <tr><td colspan="8" class="px-4 py-10 text-center text-gray-500">No manual matches in this batch match the selected dates.</td></tr> }
+                        @foreach (var match in _details)
+                        {
+                            <tr @key="match.ReconMatchId"><td class="px-4 py-3">#@match.ReconMatchId</td><td class="px-4 py-3">@(match.ReferenceNumber ?? "—")<span class="block text-gray-500">@match.MicrofilmRefNumber</span></td><td class="px-4 py-3">@(match.ProcessorMerchant ?? "—")<span class="block text-gray-500">@match.ProcessorAccountNumber</span></td><td class="whitespace-nowrap px-4 py-3">@(match.ManuallyMatchedDate?.ToString("dd MMM yyyy HH:mm") ?? "Not recorded")</td><td class="whitespace-nowrap px-4 py-3 text-right">@(match.ReconciliationAmount?.ToString("N2") ?? "—") @IsoCurrencyCatalog.Display(match.Ccy)</td><td class="whitespace-nowrap px-4 py-3 text-right">@(match.GlAmount?.ToString("N2") ?? "—") @IsoCurrencyCatalog.Display(match.GlCcy)</td><td class="px-4 py-3">@(match.GlAccountNumber ?? "—")</td><td class="min-w-64 px-4 py-3">@(match.MatchComment ?? "Not recorded")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="@PagerClass"><span>Page @(_detailPage + 1) of @DetailPages · @_detailTotal.ToString("N0") transactions</span><div class="flex gap-2"><button type="button" @onclick="PreviousDetailPage" disabled="@(_loading || _detailPage == 0)" class="@InputClass disabled:opacity-40">Previous</button><button type="button" @onclick="NextDetailPage" disabled="@(_loading || _detailPage + 1 >= DetailPages)" class="@InputClass disabled:opacity-40">Next</button></div></div>
+        </div>
+    }
+}
+
+@code {
+    private const int BatchSize = 25, DetailSize = 50;
+    private const string LabelClass = "mb-1 block text-xs font-semibold text-gray-500 dark:text-gray-400";
+    private const string InputClass = "rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100";
+    private const string PagerClass = "flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 text-sm text-gray-500 dark:border-gray-700";
+    private sealed record BatchSummary(int RunId, string Period, ReconFunction Function, bool Archived, bool Analysis, int Count, DateTime? LastMatched);
+    private bool _ready, _allowed, _loading;
+    private string _search = "", _function = "", _scope = "operational";
+    private DateTime? _from, _to;
+    private string? _error;
+    private int _batchPage, _detailPage, _batchTotal, _batchesWithManual, _detailTotal;
+    private long _manualTotal;
+    private int BatchPages => Math.Max(1, (_batchTotal + BatchSize - 1) / BatchSize);
+    private int DetailPages => Math.Max(1, (_detailTotal + DetailSize - 1) / DetailSize);
+    private List<BatchSummary> _batches = [];
+    private List<ReconMatch> _details = [];
+    private BatchSummary? _detailBatch;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _allowed = await Permissions.CanViewAsync(CurrentUser.UserId, "MANUALMATCHREPORTS");
+        _ready = true;
+        if (_allowed) await LoadAsync();
+    }
+
+    private IQueryable<ReconMatch> ManualQuery(Recon.Web.Data.AppDbContext db)
+    {
+        var query = db.ReconMatches.AsNoTracking().Where(m => m.IsManuallyMatched && m.MatchStatus == MatchStatus.Matched);
+        if (_from is { } from) query = query.Where(m => m.ManuallyMatchedDate >= from.Date);
+        if (_to is { } to) { var end = to.Date.AddDays(1); query = query.Where(m => m.ManuallyMatchedDate < end); }
+        return query;
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!_allowed || _loading) return;
+        _error = null;
+        if (_from.HasValue && _to.HasValue && _to.Value.Date < _from.Value.Date) { _error = "Matched to must be on or after Matched from."; return; }
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var runs = db.ReconRuns.AsNoTracking();
+            if (_scope == "operational") runs = runs.Where(r => r.AnalysisOfRunId == null);
+            if (_scope == "analysis") runs = runs.Where(r => r.AnalysisOfRunId != null);
+            if (int.TryParse(_function, out var function)) runs = runs.Where(r => r.Function == (ReconFunction)function);
+            var search = _search.Trim();
+            if (search.Length > 0)
+            {
+                var id = int.TryParse(search.TrimStart('#'), out var parsed) ? parsed : -1;
+                runs = runs.Where(r => r.ReconRunId == id || r.PeriodKey.Contains(search));
+            }
+            var manual = ManualQuery(db);
+            _batchTotal = await runs.CountAsync();
+            _manualTotal = await manual.Where(m => runs.Select(r => r.ReconRunId).Contains(m.ReconRunId)).LongCountAsync();
+            _batchesWithManual = await runs.CountAsync(r => manual.Any(m => m.ReconRunId == r.ReconRunId));
+            _batchPage = Math.Clamp(_batchPage, 0, BatchPages - 1);
+            _batches = await runs.OrderByDescending(r => r.ReconRunId).Skip(_batchPage * BatchSize).Take(BatchSize)
+                .Select(r => new BatchSummary(r.ReconRunId, r.PeriodKey, r.Function, r.IsArchived, r.AnalysisOfRunId != null,
+                    manual.Count(m => m.ReconRunId == r.ReconRunId), manual.Where(m => m.ReconRunId == r.ReconRunId).Max(m => m.ManuallyMatchedDate)))
+                .ToListAsync();
+            if (_detailBatch is not null)
+            {
+                var batchId = _detailBatch.RunId;
+                var detail = manual.Where(m => m.ReconRunId == batchId);
+                _detailTotal = await detail.CountAsync();
+                _detailPage = Math.Clamp(_detailPage, 0, DetailPages - 1);
+                _details = await detail.OrderByDescending(m => m.ManuallyMatchedDate).ThenByDescending(m => m.ReconMatchId)
+                    .Skip(_detailPage * DetailSize).Take(DetailSize).ToListAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unable to load manual matching report");
+            _batches = []; _details = []; _batchTotal = _batchesWithManual = _detailTotal = 0; _manualTotal = 0;
+            _error = "Unable to load the report. Select Apply to retry.";
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task ApplyFilters() { _batchPage = _detailPage = 0; _detailBatch = null; await LoadAsync(); }
+    private async Task ResetFilters() { _search = _function = ""; _scope = "operational"; _from = _to = null; await ApplyFilters(); }
+    private async Task OpenDetails(BatchSummary batch) { _detailBatch = batch; _detailPage = 0; await LoadAsync(); }
+    private void BackToCounts() { _detailBatch = null; _details = []; }
+    private async Task PreviousBatchPage() { _batchPage = Math.Max(0, _batchPage - 1); await LoadAsync(); }
+    private async Task NextBatchPage() { _batchPage = Math.Min(BatchPages - 1, _batchPage + 1); await LoadAsync(); }
+    private async Task PreviousDetailPage() { _detailPage = Math.Max(0, _detailPage - 1); await LoadAsync(); }
+    private async Task NextDetailPage() { _detailPage = Math.Min(DetailPages - 1, _detailPage + 1); await LoadAsync(); }
+    private static string FunctionLabel(ReconFunction function) => function switch { ReconFunction.InterchangeToGl => "Bulk recon", ReconFunction.AtmToGl => "ATM recon", ReconFunction.PosToGl => "POS recon", ReconFunction.NetworkToAtm => "Network ↔ ATM", _ => function.ToString() };
+}

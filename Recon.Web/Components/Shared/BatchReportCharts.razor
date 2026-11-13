@@ -1,0 +1,84 @@
+@using System.Globalization
+
+<div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+    <h2 class="text-base font-semibold text-gray-900 dark:text-white">Exception overview</h2>
+    <p class="text-xs text-gray-500 dark:text-gray-400">Counts across the full filtered report, including resolved exceptions when selected.</p>
+</div>
+<div class="grid gap-5 xl:grid-cols-3">
+    <section class="analytics-card rounded-2xl border p-5">
+        <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Exceptions by batch</h3>
+        <p class="mt-1 text-xs text-gray-500">Highest counts first · @Batches.Count batches</p>
+        @if (Batches.Count == 0)
+        {
+            <p class="py-12 text-center text-sm text-gray-500">No exceptions match these filters.</p>
+        }
+        else
+        {
+            <div class="mt-5 max-h-72 space-y-4 overflow-y-auto pr-2" tabindex="0" role="region" aria-label="Exception counts by batch; scroll to view all batches">
+                @foreach (var batch in Batches)
+                {
+                    <div>
+                        <div class="mb-1 flex justify-between gap-3 text-xs">
+                            <span class="text-gray-600 dark:text-gray-300">@batch.Label</span>
+                            <strong class="tabular-nums text-gray-900 dark:text-white">@batch.Value.ToString("N0")</strong>
+                        </div>
+                        <div class="analytics-bar-track" aria-hidden="true"><div class="analytics-bar-fill" style="width:@BarWidth(batch.Value)%;background:@batch.Color"></div></div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+    @foreach (var chart in Classifications)
+    {
+        <section class="analytics-card rounded-2xl border p-5">
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">@chart.Title</h3>
+            @if (chart.Segments.Count == 0)
+            {
+                <p class="py-12 text-center text-sm text-gray-500">No exceptions match these filters.</p>
+            }
+            else
+            {
+                <div class="mt-5 flex flex-col items-center gap-5">
+                    <div class="analytics-donut shrink-0" style="@DonutStyle(chart.Segments)" role="img" aria-label="@ChartDescription(chart.Title, chart.Segments)">
+                        <div class="analytics-donut__center"><strong>@chart.Segments.Sum(s => s.Value).ToString("N0")</strong><span>Exceptions</span></div>
+                    </div>
+                    <ul class="w-full space-y-2 text-xs">
+                        @foreach (var segment in chart.Segments)
+                        {
+                            <li class="flex items-center justify-between gap-2">
+                                <span class="flex items-center gap-2 text-gray-600 dark:text-gray-300"><span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:@segment.Color" aria-hidden="true"></span>@segment.Label</span>
+                                <span class="whitespace-nowrap tabular-nums text-gray-900 dark:text-white"><strong>@segment.Value.ToString("N0")</strong> <span class="text-gray-500">(@Share(segment.Value, chart.Segments)%)</span></span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<AnalyticsBar> Batches { get; set; } = [];
+    [Parameter] public IReadOnlyList<AnalyticsSegment> Types { get; set; } = [];
+    [Parameter] public IReadOnlyList<AnalyticsSegment> Statuses { get; set; } = [];
+    private IEnumerable<(string Title, IReadOnlyList<AnalyticsSegment> Segments)> Classifications =>
+        [("Exception classification", Types), ("Resolution status", Statuses)];
+
+    private string BarWidth(long value) => (100d * value / Math.Max(1, Batches.Max(b => b.Value))).ToString("0.##", CultureInfo.InvariantCulture);
+    private static string Share(long value, IReadOnlyList<AnalyticsSegment> segments) =>
+        (100d * value / Math.Max(1, segments.Sum(s => s.Value))).ToString("0.0", CultureInfo.InvariantCulture);
+    private static string ChartDescription(string title, IReadOnlyList<AnalyticsSegment> segments) =>
+        $"{title}: {string.Join(", ", segments.Select(s => $"{s.Label}: {s.Value:N0} ({Share(s.Value, segments)}%)"))}";
+    private static string DonutStyle(IReadOnlyList<AnalyticsSegment> segments)
+    {
+        var total = Math.Max(1, segments.Sum(s => s.Value));
+        var cursor = 0d;
+        var stops = segments.Where(s => s.Value > 0).Select(s =>
+        {
+            var start = cursor;
+            cursor += 100d * s.Value / total;
+            return FormattableString.Invariant($"{s.Color} {start:0.####}% {cursor:0.####}%");
+        });
+        return $"background:conic-gradient({string.Join(", ", stops)})";
+    }
+}
